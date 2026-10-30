@@ -86,20 +86,28 @@ function skipFrontmatter(lines: string[]): number {
 
 function stripComments(line: string, inComment: boolean): { text: string; inComment: boolean; removed: boolean } {
   let text = "";
-  let rest = line;
   let removed = false;
-  while (true) {
-    const marker = rest.indexOf("%%");
-    if (marker === -1) {
-      if (!inComment) text += rest;
-      else removed = true;
-      return { text, inComment, removed };
+  let index = 0;
+  while (index < line.length) {
+    if (line.startsWith("%%", index)) {
+      inComment = !inComment;
+      removed = true;
+      index += 2;
+      continue;
     }
-    if (!inComment) text += rest.slice(0, marker);
-    removed = true;
-    inComment = !inComment;
-    rest = rest.slice(marker + 2);
+    if (!inComment && line[index] === "`") {
+      const fence = /^`+/.exec(line.slice(index))![0];
+      const close = line.indexOf(fence, index + fence.length);
+      const end = close === -1 ? index + fence.length : close + fence.length;
+      text += line.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (inComment) removed = true;
+    else text += line[index];
+    index++;
   }
+  return { text, inComment, removed };
 }
 
 function linksIn(line: string, index: number): Link[] {

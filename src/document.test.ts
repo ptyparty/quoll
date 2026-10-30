@@ -33,6 +33,12 @@ describe("parseDocument", () => {
     expect(block.kind === "markdown" && block.text).toBe("See **the rollout** and [notes](notes.md) or ↪ **other page**.");
   });
 
+  test("keeps %% inside inline code", () => {
+    const doc = parseDocument("inline `%% %%` and ``a %% b`` stay %%gone%%");
+    const block = doc.blocks[0]!;
+    expect(block.kind === "markdown" && block.text).toBe("inline `%% %%` and ``a %% b`` stay ");
+  });
+
   test("skips frontmatter and Obsidian comments but not code", () => {
     const doc = parseDocument("---\ntags: [a]\n---\nkeep %%hidden%% this\n%%\nall gone\n%%\n```\n%% code %%\n# not a heading\n```");
     const text = doc.blocks.map((block) => (block.kind === "markdown" ? block.text : "")).join("|");
