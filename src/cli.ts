@@ -1,15 +1,17 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core";
-import { mkdirSync, realpathSync, watch } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { findNotebook, isFile, pageFromPath } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { listen, send } from "./socket.ts";
 import { Viewer } from "./viewer/viewer.ts";
+import { watchNotebook } from "./watch.ts";
 
 const usage = `Usage:
   quoll [dir] [--no-follow]           View the notebook for dir (default: the current directory)
   quoll show <page>[#heading]         Show a page in every quoll viewing this notebook
   quoll path                          Print the notebook folder for the current directory
+  quoll watch                         Print "changed: <page>" each time a page in the notebook is saved
 
 Options:
   --dir <folder>   The notebook root for this run, overriding QUOLL_DIR
@@ -55,16 +57,17 @@ async function main(args: string[]): Promise<number> {
     console.error(usage);
     return 2;
   }
-  const command = options.positional[0] === "show" || options.positional[0] === "path" ? options.positional.shift() : undefined;
+  const command = ["show", "path", "watch"].includes(options.positional[0] ?? "") ? options.positional.shift() : undefined;
   if (command === "show") return show(options);
+  if ((command === "path" || command === "watch") && options.positional.length > 0) {
+    console.error(usage);
+    return 2;
+  }
   if (command === "path") {
-    if (options.positional.length > 0) {
-      console.error(usage);
-      return 2;
-    }
     console.log(notebookFor(options, process.cwd()));
     return 0;
   }
+  if (command === "watch") return watchPages(notebookFor(options, process.cwd()));
   if (options.positional.length > 1) {
     console.error(usage);
     return 2;
@@ -95,6 +98,18 @@ async function show(options: Options): Promise<number> {
   return 0;
 }
 
+async function watchPages(root: string): Promise<number> {
+  mkdirSync(root, { recursive: true });
+  const stop = watchNotebook(realpathSync(root), 500, (filename) => {
+    if (filename.endsWith(".md")) console.log(`changed: ${filename}`);
+  });
+  await new Promise<void>((resolve) => {
+    for (const signal of ["SIGHUP", "SIGTERM", "SIGINT"] as const) process.once(signal, () => resolve());
+  });
+  stop();
+  return 0;
+}
+
 async function view(root: string, follow: boolean): Promise<number> {
   mkdirSync(root, { recursive: true });
   root = realpathSync(root);
@@ -112,18 +127,9 @@ async function view(root: string, follow: boolean): Promise<number> {
       }
     },
   });
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
-  const watcher = watch(root, { recursive: true }, (_event, filename) => {
-    if (!filename || filename.split("/").some((part) => part.startsWith("."))) return;
-    clearTimeout(timers.get(filename));
-    timers.set(
-      filename,
-      setTimeout(() => {
-        timers.delete(filename);
-        viewer.fileChanged(filename);
-        renderer.requestRender();
-      }, 100),
-    );
+  const stopWatching = watchNotebook(root, 100, (filename) => {
+    viewer.fileChanged(filename);
+    renderer.requestRender();
   });
   const stopListening = listen(root, (request) => {
     const reply = viewer.show(request.show, request.root);
@@ -138,7 +144,7 @@ async function view(root: string, follow: boolean): Promise<number> {
     await viewer.run();
   } finally {
     for (const signal of signals) process.off(signal, onSignal);
-    watcher.close();
+    stopWatching();
     stopListening();
     renderer.destroy();
     await renderer.closed;
