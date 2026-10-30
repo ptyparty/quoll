@@ -33,6 +33,16 @@ describe("parseDocument", () => {
     expect(block.kind === "markdown" && block.text).toBe("See **the rollout** and [notes](notes.md) or ↪ **other page**.");
   });
 
+  test("turns a mermaid fence into a diagram block and leaves other fences as markdown", () => {
+    const doc = parseDocument("intro\n```mermaid\nflowchart LR\n  A --> B\n```\n```ts\nconst a = 1;\n```\n~~~mermaid\nsequenceDiagram");
+    expect(doc.blocks).toEqual([
+      { kind: "markdown", text: "intro", startLine: 0, endLine: 0 },
+      { kind: "mermaid", source: "flowchart LR\n  A --> B", startLine: 1, endLine: 4 },
+      { kind: "markdown", text: "```ts\nconst a = 1;\n```", startLine: 5, endLine: 7 },
+      { kind: "mermaid", source: "sequenceDiagram", startLine: 8, endLine: 9 },
+    ]);
+  });
+
   test("keeps %% inside inline code", () => {
     const doc = parseDocument("inline `%% %%` and ``a %% b`` stay %%gone%%");
     const block = doc.blocks[0]!;

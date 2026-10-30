@@ -1,6 +1,7 @@
 export type Block =
   | { kind: "markdown"; text: string; startLine: number; endLine: number }
-  | { kind: "image"; target: string; alt: string; startLine: number; endLine: number };
+  | { kind: "image"; target: string; alt: string; startLine: number; endLine: number }
+  | { kind: "mermaid"; source: string; startLine: number; endLine: number };
 
 export type Heading = { level: number; text: string; line: number };
 
@@ -44,6 +45,14 @@ export function parseDocument(source: string): Document {
       continue;
     }
     const fenceMatch = fence.exec(raw);
+    if (fenceMatch && !inComment && raw.slice(fenceMatch[0].length).trim() === "mermaid") {
+      const close = lines.findIndex((candidate, at) => at > index && candidate.trim().startsWith(fenceMatch[1]!));
+      const end = close === -1 ? lines.length - 1 : close;
+      flush(index - 1);
+      blocks.push({ kind: "mermaid", source: lines.slice(index + 1, close === -1 ? lines.length : close).join("\n"), startLine: index, endLine: end });
+      index = end;
+      continue;
+    }
     if (fenceMatch && !inComment) {
       openFence = fenceMatch[1]!;
       append(raw, index);

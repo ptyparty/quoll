@@ -3,7 +3,9 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Viewer } from "./viewer.ts";
+import { MermaidRenderer } from "../render/mermaid.ts";
+import { tinyPng } from "../render/test-images.ts";
+import { Viewer, type ViewerOptions } from "./viewer.ts";
 
 let setup: TestRendererSetup | undefined;
 let root: string;
@@ -23,7 +25,7 @@ afterEach(async () => {
 
 const longPlan = ["# Plan", "intro", "", ...Array.from({ length: 40 }, (_, index) => `filler ${index}`), "", "## Rollout", "ship it carefully"].join("\n");
 
-async function open(follow = true): Promise<{ setup: TestRendererSetup; viewer: Viewer }> {
+async function open(follow = true, options: Partial<ViewerOptions> = {}): Promise<{ setup: TestRendererSetup; viewer: Viewer }> {
   setup = await createTestRenderer({ width: 80, height: 16 });
   const viewer = new Viewer(setup.renderer, {
     root,
@@ -32,6 +34,7 @@ async function open(follow = true): Promise<{ setup: TestRendererSetup; viewer: 
     edit: async (file, line) => {
       edits.push({ file, line });
     },
+    ...options,
   });
   viewer.start();
   await settle(setup);
@@ -52,6 +55,39 @@ async function settle(setup: TestRendererSetup): Promise<string> {
 }
 
 describe("viewer", () => {
+  test("shows a mermaid diagram's source while it draws, then the drawing, or the source with the reason it failed", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n```mermaid\nbroken\n```");
+    const gate = Promise.withResolvers<void>();
+    const mermaid = new MermaidRenderer(join(root, ".cache"), "/usr/bin/chrome", async (source, png) => {
+      await gate.promise;
+      if (source === "broken") throw new Error("Parse error on line 1");
+      await Bun.write(png, tinyPng(40, 20));
+    });
+    const written: string[] = [];
+    const { setup } = await open(true, { mermaid, images: () => ({ enabled: true, write: (commands) => written.push(...commands) }) });
+    let frame = setup.captureCharFrame();
+    expect(frame).toContain("A --> B");
+    expect(frame).toContain("Drawing the diagram…");
+    gate.resolve();
+    await Bun.sleep(20);
+    frame = await settle(setup);
+    expect(frame).not.toContain("A --> B");
+    expect(written.some((command) => command.startsWith("\x1b_G"))).toBe(true);
+    expect(frame).toContain("broken");
+    expect(frame).toContain("Parse error on line 1");
+  });
+
+  test("shows mermaid source when the terminal can't show images", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n```mermaid\nflowchart LR\n  A --> B\n```");
+    const mermaid = new MermaidRenderer(join(root, ".cache"), "/usr/bin/chrome", async () => {
+      throw new Error("should not draw");
+    });
+    const { setup } = await open(true, { mermaid });
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("A --> B");
+    expect(frame).not.toContain("Drawing");
+  });
+
   test("opens index.md and follows a link picked from the link list", async () => {
     writeFileSync(join(root, "index.md"), "# Index\n\nSee [[plan|the plan]].");
     writeFileSync(join(root, "design", "plan.md"), "# Plan\n\nThe body.");

@@ -3,6 +3,7 @@ import { createCliRenderer } from "@opentui/core";
 import { mkdirSync, realpathSync } from "node:fs";
 import { findNotebook, isFile, pageFromPath } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
+import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.ts";
 import { listen, send } from "./socket.ts";
 import { Viewer } from "./viewer/viewer.ts";
 import { watchNotebook } from "./watch.ts";
@@ -117,6 +118,7 @@ async function view(root: string, follow: boolean): Promise<number> {
   const viewer = new Viewer(renderer, {
     root,
     follow,
+    mermaid: new MermaidRenderer(mermaidCacheDir(), findChrome()),
     images: () => terminalImageOutput(renderer.capabilities?.kitty_graphics ?? false),
     edit: async (file, line) => {
       await renderer.suspend();

@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { blockAtLine, firstChangedLine, headingKey, parseDocument, type Block, type Document } from "../document.ts";
 import { imageIdColor, placeholderLines, type ImageOutput } from "../render/image.ts";
 import { markdownStyle, sendImage } from "../render/markdown.ts";
+import type { MermaidRenderer } from "../render/mermaid.ts";
 import { styled, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
 import { contains, indexPage, listFiles, listPages, overlaps, resolveAsset, resolveTarget } from "../notebook.ts";
@@ -16,6 +17,7 @@ export type ViewerOptions = {
   images: () => ImageOutput;
   edit: (file: string, line: number) => Promise<void>;
   follow: boolean;
+  mermaid?: MermaidRenderer;
 };
 
 type Picker = { state: PickerState<() => void> };
@@ -232,22 +234,44 @@ export class Viewer {
       return new MarkdownRenderable(this.renderer, { content: block.text, syntaxStyle: this.style, marginTop, tableOptions: { widthMode: "content", cellPaddingX: 1 } });
     }
     const box = new BoxRenderable(this.renderer, { flexDirection: "column", marginTop, flexShrink: 0 });
-    const path = page ? resolveAsset(this.options.root, page, block.target, files) : undefined;
     const images = this.options.images();
+    if (block.kind === "mermaid") return this.diagramView(box, block.source, page, images);
+    const path = page ? resolveAsset(this.options.root, page, block.target, files) : undefined;
     const caption = block.alt || block.target;
     if (path && images.enabled) {
-      const shown = this.upload(path, images);
-      if ("error" in shown) {
-        box.add(new TextRenderable(this.renderer, { content: shown.error, fg: theme.error }));
-      } else {
-        box.add(new TextRenderable(this.renderer, { content: placeholderLines(shown).join("\n"), fg: imageIdColor(shown.id), wrapMode: "none", height: shown.rows, flexShrink: 0 }));
-        box.add(new TextRenderable(this.renderer, { content: caption, fg: theme.muted }));
-      }
+      this.addImage(box, path, images, caption);
       return box;
     }
     const label: Part[] = [fg(theme.muted)("[image] "), caption, ...(path ? [] : [fg(theme.warning)(" (not found)")])];
     box.add(new TextRenderable(this.renderer, { content: styled(label) }));
     return box;
+  }
+
+  private diagramView(box: BoxRenderable, source: string, page: string | undefined, images: ImageOutput): BoxRenderable {
+    const diagram = images.enabled && this.options.mermaid ? this.options.mermaid.diagram(source, () => this.diagramDrawn(page)) : undefined;
+    if (diagram && "png" in diagram) {
+      this.addImage(box, diagram.png, images, undefined);
+      return box;
+    }
+    box.add(new MarkdownRenderable(this.renderer, { content: `\`\`\`mermaid\n${source}\n\`\`\``, syntaxStyle: this.style }));
+    if (diagram && "pending" in diagram) box.add(new TextRenderable(this.renderer, { content: "Drawing the diagram…", fg: theme.muted }));
+    if (diagram && "error" in diagram) box.add(new TextRenderable(this.renderer, { content: diagram.error, fg: theme.warning }));
+    return box;
+  }
+
+  private diagramDrawn(page: string | undefined): void {
+    if (page === undefined || page !== this.shown || this.editing) return;
+    this.reload();
+  }
+
+  private addImage(box: BoxRenderable, path: string, images: ImageOutput, caption: string | undefined): void {
+    const shown = this.upload(path, images);
+    if ("error" in shown) {
+      box.add(new TextRenderable(this.renderer, { content: shown.error, fg: theme.error }));
+      return;
+    }
+    box.add(new TextRenderable(this.renderer, { content: placeholderLines(shown).join("\n"), fg: imageIdColor(shown.id), wrapMode: "none", height: shown.rows, flexShrink: 0 }));
+    if (caption) box.add(new TextRenderable(this.renderer, { content: caption, fg: theme.muted }));
   }
 
   private upload(path: string, images: ImageOutput): Upload | { error: string } {
