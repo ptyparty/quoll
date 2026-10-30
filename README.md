@@ -1,5 +1,7 @@
 # quoll
 
+<p align="center"><img src="docs/quoll.svg" alt="A cartoon spotted-tailed quoll, chestnut brown with white spots" width="320"></p>
+
 A terminal viewer for a story's design notebook: a folder of markdown pages and images, readable in Obsidian too.
 
 ```
