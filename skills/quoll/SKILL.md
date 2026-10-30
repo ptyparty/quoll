@@ -15,6 +15,7 @@ Run `quoll path` from the story directory; it prints the notebook folder, which 
 
 - `plan.md`: the implementation plan. Update it as the plan changes rather than appending a history.
 - Mockups and screenshots as images, embedded in the page that discusses them.
+- Diagrams as mermaid blocks, wherever a picture explains it faster than prose: flows, state machines, sequences between processes, how components fit together. quoll draws them, so reach for them instead of ASCII art.
 - `decisions.md`: each decision with its reason and the alternatives considered.
 - Open questions you need the user to settle.
 
@@ -26,6 +27,7 @@ Standard markdown plus the Obsidian forms quoll reads:
 
 - `[[page]]`, `[[page#Heading]]`, `[[page|label]]` link to other pages, by name or path.
 - `![[mockup.png]]` or `![caption](shots/mockup.png)` on its own line shows an image. Keep images inside the notebook folder.
+- A fenced code block tagged `mermaid` is drawn as a diagram, in any type mermaid supports. One that fails to parse shows its source and mermaid's error instead, and readers in a terminal without images see the source, so keep labels short and the source readable.
 - `%% hidden %%` is left out of the rendered page.
 - Frontmatter is skipped.
 
