@@ -1,45 +1,88 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core";
-import { existsSync, mkdirSync, statSync, watch } from "node:fs";
-import { findNotebook, pageFromPath } from "./notebook.ts";
+import { mkdirSync, realpathSync, watch } from "node:fs";
+import { findNotebook, isFile, pageFromPath } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { listen, send } from "./socket.ts";
 import { Viewer } from "./viewer/viewer.ts";
 
 const usage = `Usage:
-  quoll [dir] [--no-follow]    View the notebook in dir (or the nearest notebook/ above it)
-  quoll show <page>[#heading]  Show a page in every quoll viewing this notebook
+  quoll [dir] [--no-follow]           View the notebook for dir (default: the current directory)
+  quoll show <page>[#heading]         Show a page in every quoll viewing this notebook
+  quoll path                          Print the notebook folder for the current directory
 
-The notebook is the nearest folder named notebook, or a notebook/ folder in the
-nearest directory that has one. Pages are markdown files; links and embeds may
-use Obsidian syntax.`;
+Options:
+  --dir <folder>   The notebook root for this run, overriding QUOLL_DIR
+
+QUOLL_DIR is the notebook root, which holds a folder per story. Inside it, a
+folder is used as is, so quoll $QUOLL_DIR browses every story. Anywhere else the
+notebook is $QUOLL_DIR/<story>, where <story> is the directory under the
+outermost "stories" directory above the current one.
+
+Without QUOLL_DIR, the notebook is the nearest folder named notebook, or a
+notebook/ folder in the nearest directory that has one.
+
+Pages are markdown files; links and embeds may use Obsidian syntax.`;
+
+type Options = { dir?: string; follow: boolean; positional: string[] };
+
+function parseOptions(args: string[]): Options | undefined {
+  const options: Options = { follow: true, positional: [] };
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === "--no-follow") options.follow = false;
+    else if (arg === "--dir") {
+      const dir = args[++index];
+      if (!dir) return undefined;
+      options.dir = dir;
+    } else if (arg.startsWith("--")) return undefined;
+    else options.positional.push(arg);
+  }
+  return options;
+}
+
+function notebookFor(options: Options, start: string): string {
+  return findNotebook(start, options.dir ?? process.env.QUOLL_DIR);
+}
 
 async function main(args: string[]): Promise<number> {
   if (args[0] === "help" || args.includes("--help") || args.includes("-h")) {
     console.log(usage);
     return 0;
   }
-  if (args[0] === "show") return show(args.slice(1));
-  const follow = !args.includes("--no-follow");
-  const positional = args.filter((arg) => !arg.startsWith("--"));
-  if (positional.length > 1) {
+  const options = parseOptions(args);
+  if (!options) {
     console.error(usage);
     return 2;
   }
-  return view(findNotebook(positional[0] ?? process.cwd()), follow);
+  const command = options.positional[0] === "show" || options.positional[0] === "path" ? options.positional.shift() : undefined;
+  if (command === "show") return show(options);
+  if (command === "path") {
+    if (options.positional.length > 0) {
+      console.error(usage);
+      return 2;
+    }
+    console.log(notebookFor(options, process.cwd()));
+    return 0;
+  }
+  if (options.positional.length > 1) {
+    console.error(usage);
+    return 2;
+  }
+  return view(notebookFor(options, options.positional[0] ?? process.cwd()), options.follow);
 }
 
-async function show(args: string[]): Promise<number> {
-  const target = args[0];
-  if (!target || args.length > 1) {
+async function show(options: Options): Promise<number> {
+  const target = options.positional[0];
+  if (!target || options.positional.length > 1) {
     console.error(usage);
     return 2;
   }
-  const root = findNotebook(process.cwd());
+  const root = notebookFor(options, process.cwd());
   const [path, anchor] = target.split(/#(.*)/s, 2);
-  const asFile = path?.endsWith(".md") && existsSync(path) && statSync(path).isFile() ? pageFromPath(root, process.cwd(), path) : undefined;
+  const asFile = path?.endsWith(".md") && isFile(path) ? pageFromPath(root, process.cwd(), realpathSync(path)) : undefined;
   const request = asFile ? `${asFile}${anchor ? `#${anchor}` : ""}` : target;
-  const replies = await send(root, { show: request });
+  const replies = (await send({ show: request, root })).filter((reply) => !("ignored" in reply));
   if (replies.length === 0) {
     console.error(`No quoll is open on ${root}`);
     return 1;
@@ -54,6 +97,7 @@ async function show(args: string[]): Promise<number> {
 
 async function view(root: string, follow: boolean): Promise<number> {
   mkdirSync(root, { recursive: true });
+  root = realpathSync(root);
   const renderer = await createCliRenderer({ exitOnCtrlC: false, exitSignals: [], useMouse: true });
   const viewer = new Viewer(renderer, {
     root,
@@ -82,9 +126,9 @@ async function view(root: string, follow: boolean): Promise<number> {
     );
   });
   const stopListening = listen(root, (request) => {
-    const error = viewer.show(request.show);
+    const reply = viewer.show(request.show, request.root);
     renderer.requestRender();
-    return error ? { error } : { ok: true };
+    return reply;
   });
   const signals = ["SIGHUP", "SIGTERM", "SIGINT"] as const;
   const onSignal = () => viewer.close();

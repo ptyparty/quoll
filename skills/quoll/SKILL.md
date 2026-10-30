@@ -1,6 +1,6 @@
 ---
 name: quoll
-description: Keeps a story's design notebook (implementation plan, mockups, decisions, open questions) as markdown pages in its notebook/ folder, and points the user at a page with `quoll show`. Use when planning or designing work in a story directory, when recording a decision, mockup, or plan change, when the user mentions the notebook, quoll, or "show me" a plan or design, or when you want the user to look at a specific page or heading.
+description: Keeps a story's design notebook (implementation plan, mockups, decisions, open questions) as markdown pages in the folder `quoll path` names, and points the user at a page with `quoll show`. Use when planning or designing work in a story directory, when recording a decision, mockup, or plan change, when the user mentions the notebook, quoll, or "show me" a plan or design, or when you want the user to look at a specific page or heading.
 ---
 
 # Design notebook
@@ -9,7 +9,7 @@ The user reads the notebook in quoll, a terminal viewer that usually sits beside
 
 ## Where it lives
 
-`notebook/` in the story directory (the nearest folder named `notebook`, or the nearest directory that contains one). Create it if it is missing. Keep `index.md` as the entry page: a short summary of the work and links to every other page, since quoll opens it first.
+Run `quoll path` from the story directory; it prints the notebook folder, which is usually outside the story directory (a folder per story under the user's notebook root). Create the folder if it is missing. Keep `index.md` as the entry page: a short summary of the work and links to every other page, since quoll opens it first.
 
 ## What goes in
 
@@ -36,6 +36,6 @@ quoll show plan#Rollout
 quoll show notebook/decisions.md
 ```
 
-The target is a page name or path (relative to the notebook, or a file path from the current directory) with an optional `#Heading`. Every quoll open on this notebook jumps there. Use it when you want the user to read a particular section, not after every write; follow mode already shows them what you are writing. Showing a page turns follow mode off, so the user stays on it until they turn follow back on.
+The target is a page name or path (relative to the notebook, or a file path) with an optional `#Heading`. Run it from the story directory so it finds the same notebook as `quoll path`. Every quoll open on this notebook, or on a folder that contains it, jumps there. Use it when you want the user to read a particular section, not after every write; follow mode already shows them what you are writing. Showing a page turns follow mode off, so the user stays on it until they turn follow back on.
 
 Exit status 1 with "No quoll is open" means nobody is viewing the notebook. That is not an error to fix; mention the page in your reply instead.

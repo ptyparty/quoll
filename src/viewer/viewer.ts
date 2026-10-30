@@ -1,12 +1,13 @@
 import { BoxRenderable, MarkdownRenderable, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { blockAtLine, firstChangedLine, headingKey, parseDocument, type Block, type Document } from "../document.ts";
 import { imageIdColor, placeholderLines, type ImageOutput } from "../render/image.ts";
 import { markdownStyle, sendImage } from "../render/markdown.ts";
 import { styled, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
-import { indexPage, listFiles, listPages, resolveAsset, resolveTarget } from "../notebook.ts";
+import { contains, indexPage, listFiles, listPages, overlaps, resolveAsset, resolveTarget } from "../notebook.ts";
+import type { Reply } from "../socket.ts";
 import { History } from "./history.ts";
 import { PickerState, PickerView, pickerKey, type PickerItem } from "./picker.ts";
 
@@ -42,7 +43,7 @@ export class Viewer {
   private settleFrames = 0;
   private shown: string | undefined;
   private lastChange: string | undefined;
-  private pendingShow: string | undefined;
+  private pendingShow: { target: string; notebook: string } | undefined;
   private message: { text: string; until: number } | undefined;
   private editing = false;
   private closed: () => void = () => {};
@@ -89,16 +90,22 @@ export class Viewer {
     this.visit(existsSync(join(this.options.root, indexPage)) ? indexPage : undefined);
   }
 
-  show(target: string): string | undefined {
-    const resolved = resolveTarget(this.options.root, this.page, target);
-    if (!resolved) return `No page matches ${target}`;
+  show(target: string, notebook = this.options.root): Reply {
+    const root = this.options.root;
+    const current = this.page ? join(root, this.page) : undefined;
+    const from = current && contains(notebook, current) ? relative(notebook, current) : undefined;
+    const resolved = resolveTarget(notebook, from, target);
+    if (!resolved) return overlaps(root, notebook) ? { error: `No page matches ${target}` } : { ignored: true };
+    const file = join(notebook, resolved.page);
+    if (!contains(root, file)) return { ignored: true };
     if (this.editing) {
-      this.pendingShow = target;
-      return undefined;
+      this.pendingShow = { target, notebook };
+      return { ok: true };
     }
+    const page = relative(root, file);
     this.stopFollowing();
-    const found = this.visit(resolved.page, resolved.anchor);
-    return found ? undefined : `Showing ${resolved.page}, but it has no heading ${resolved.anchor}`;
+    const found = this.visit(page, resolved.anchor);
+    return found ? { ok: true } : { error: `Showing ${page}, but it has no heading ${resolved.anchor}` };
   }
 
   fileChanged(path: string): void {
@@ -432,7 +439,7 @@ export class Viewer {
     for (const path of deferred) this.fileChanged(path);
     const show = this.pendingShow;
     this.pendingShow = undefined;
-    if (show) this.show(show);
+    if (show) this.show(show.target, show.notebook);
     this.renderer.requestRender();
   }
 

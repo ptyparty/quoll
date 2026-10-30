@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { findNotebook, listPages, pageFromPath, resolveAsset, resolveTarget } from "./notebook.ts";
 
@@ -24,6 +24,38 @@ describe("findNotebook", () => {
     expect(findNotebook(story)).toBe(root);
     expect(findNotebook(join(root, "design"))).toBe(root);
     expect(findNotebook(join(story, "repo", "src"))).toBe(root);
+  });
+});
+
+describe("findNotebook with a notebook root", () => {
+  test("maps a story dir, or anything below it, to the story's folder in the notebook root", () => {
+    const notes = join(story, "notes");
+    const work = join(story, "work", "stories", "sc-1", "repo", "storybook", "stories", "Button");
+    mkdirSync(work, { recursive: true });
+    expect(findNotebook(work, notes)).toBe(join(notes, "sc-1"));
+    expect(findNotebook(join(story, "work", "stories", "sc-1"), notes)).toBe(join(notes, "sc-1"));
+  });
+
+  test("uses folders inside the notebook root as they are, including the root itself", () => {
+    const notes = join(story, "notes");
+    expect(findNotebook(notes, notes)).toBe(notes);
+    expect(findNotebook(join(notes, "sc-1"), notes)).toBe(join(notes, "sc-1"));
+  });
+
+  test("recognises the root through a symlink", () => {
+    const notes = join(story, "notes");
+    mkdirSync(notes);
+    symlinkSync(notes, join(story, "linked"));
+    expect(findNotebook(notes, join(story, "linked"))).toBe(notes);
+  });
+
+  test("outside any stories directory, falls back to the notebook folder lookup", () => {
+    mkdirSync(join(story, "notes", "repo"), { recursive: true });
+    expect(findNotebook(join(story, "repo", "src"), join(story, "notes"))).toBe(root);
+  });
+
+  test("expands ~ in the root", () => {
+    expect(findNotebook(join(homedir(), "notes-quoll-test", "sc-1"), "~/notes-quoll-test")).toBe(join(homedir(), "notes-quoll-test", "sc-1"));
   });
 });
 

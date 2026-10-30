@@ -120,13 +120,13 @@ describe("viewer", () => {
   test("show scrolls to a heading and scrolling stops following", async () => {
     writeFileSync(join(root, "design", "plan.md"), longPlan);
     const { setup, viewer } = await open();
-    expect(viewer.show("plan#rollout")).toBeUndefined();
+    expect(viewer.show("plan#rollout")).toEqual({ ok: true });
     let frame = await settle(setup);
     expect(frame).toContain("ship it carefully");
     expect(frame).not.toContain("intro");
     expect(viewer.isFollowing).toBe(false);
-    expect(viewer.show("nowhere")).toBe("No page matches nowhere");
-    expect(viewer.show("plan#Nope")).toBe("Showing design/plan.md, but it has no heading Nope");
+    expect(viewer.show("nowhere")).toEqual({ error: "No page matches nowhere" });
+    expect(viewer.show("plan#Nope")).toEqual({ error: "Showing design/plan.md, but it has no heading Nope" });
     setup.mockInput.pressKey("g");
     frame = await settle(setup);
     expect(frame).toContain("intro");
@@ -159,7 +159,7 @@ describe("viewer", () => {
     setup.mockInput.pressKey("e");
     writeFileSync(join(root, "design", "plan.md"), `${longPlan}\nlate line`);
     viewer.fileChanged("design/plan.md");
-    expect(viewer.show("plan#rollout")).toBeUndefined();
+    expect(viewer.show("plan#rollout")).toEqual({ ok: true });
     expect(viewer.page).toBe("index.md");
     finish();
     const frame = await settle(setup);
@@ -184,5 +184,30 @@ describe("viewer", () => {
     await settle(setup);
     setup.mockInput.pressKey("e");
     expect(await settle(setup)).toContain("Could not edit: hx not found");
+  });
+
+  test("a viewer on a parent folder shows pages from a story notebook inside it", async () => {
+    mkdirSync(join(root, "sc-1"));
+    writeFileSync(join(root, "sc-1", "plan.md"), longPlan);
+    const { setup, viewer } = await open();
+    expect(viewer.show("plan#rollout", join(root, "sc-1"))).toEqual({ ok: true });
+    const frame = await settle(setup);
+    expect(viewer.page).toBe("sc-1/plan.md");
+    expect(frame).toContain("ship it carefully");
+    expect(viewer.show("#Plan", join(root, "sc-1"))).toEqual({ ok: true });
+    expect(viewer.show("#Nope", join(root, "sc-1"))).toEqual({ error: "Showing sc-1/plan.md, but it has no heading Nope" });
+    expect(viewer.show("plan", join(root, "..", "elsewhere"))).toEqual({ ignored: true });
+  });
+
+  test("a viewer on a folder inside the notebook takes shows for pages in that folder", async () => {
+    writeFileSync(join(root, "design", "plan.md"), longPlan);
+    writeFileSync(join(root, "index.md"), "# Index");
+    setup = await createTestRenderer({ width: 80, height: 16 });
+    const viewer = new Viewer(setup.renderer, { root: join(root, "design"), follow: true, images: () => ({ enabled: false, write: () => {} }), edit: async () => {} });
+    viewer.start();
+    await settle(setup);
+    expect(viewer.show("design/plan", root)).toEqual({ ok: true });
+    expect(viewer.page).toBe("plan.md");
+    expect(viewer.show("index", root)).toEqual({ ignored: true });
   });
 });

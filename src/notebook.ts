@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join, normalize, relative, resolve, sep } from "node:path";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { isExternal } from "./document.ts";
 
 export const notebookFolder = "notebook";
@@ -9,16 +10,50 @@ export type Page = { path: string; modified: number };
 
 export type Target = { page: string; anchor?: string };
 
-export function findNotebook(start: string): string {
-  let dir = resolve(start);
+export function findNotebook(start: string, notebookRoot?: string): string {
+  const from = realOrResolved(start);
+  if (notebookRoot) {
+    const root = realOrResolved(expandHome(notebookRoot));
+    if (contains(root, from)) return from;
+    const story = storyDir(from);
+    if (story) return join(root, basename(story));
+  }
+  let dir = from;
   while (true) {
     if (basename(dir) === notebookFolder) return dir;
     const candidate = join(dir, notebookFolder);
-    if (existsSync(candidate) && statSync(candidate).isDirectory()) return candidate;
+    if (isDirectory(candidate)) return candidate;
     const parent = dirname(dir);
     if (parent === dir) return join(resolve(start), notebookFolder);
     dir = parent;
   }
+}
+
+function storyDir(from: string): string | undefined {
+  const ancestors: string[] = [];
+  for (let dir = from; dirname(dir) !== dir; dir = dirname(dir)) ancestors.push(dir);
+  return ancestors.findLast((dir) => basename(dirname(dir)) === "stories");
+}
+
+function expandHome(path: string): string {
+  return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
+}
+
+function realOrResolved(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+export function contains(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+export function overlaps(a: string, b: string): boolean {
+  return contains(a, b) || contains(b, a);
 }
 
 export function listFiles(root: string): string[] {
@@ -86,7 +121,7 @@ export function resolveAsset(root: string, from: string, target: string, files: 
   return found ? join(root, found) : undefined;
 }
 
-function isFile(path: string): boolean {
+export function isFile(path: string): boolean {
   try {
     return statSync(path).isFile();
   } catch {
@@ -94,9 +129,17 @@ function isFile(path: string): boolean {
   }
 }
 
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function pageFromPath(root: string, cwd: string, path: string): string | undefined {
-  const page = relative(root, resolve(cwd, path));
-  return page.startsWith("..") ? undefined : page;
+  const file = resolve(cwd, path);
+  return contains(root, file) ? relative(root, file) : undefined;
 }
 
 function inside(root: string, path: string): string | undefined {

@@ -1,23 +1,22 @@
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { overlaps } from "./notebook.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Request = { show: string };
-export type Reply = { ok: true } | { error: string };
+export type Request = { show: string; root: string };
+export type Reply = { ok: true } | { error: string } | { ignored: true };
 
 function socketDir(env: Record<string, string | undefined> = process.env): string {
   return join(env.XDG_RUNTIME_DIR || tmpdir(), "quoll");
 }
 
-function prefix(root: string): string {
-  return `${Bun.hash(root).toString(36)}-`;
-}
-
 export function listen(root: string, handle: (request: Request) => Reply): () => void {
   const dir = socketDir();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = join(dir, `${prefix(root)}${process.pid}.sock`);
+  const path = join(dir, `${process.pid}.sock`);
+  const rootFile = join(dir, `${process.pid}.root`);
   rmSync(path, { force: true });
+  writeFileSync(rootFile, root);
   const buffers = new Map<object, string>();
   const server = Bun.listen({
     unix: path,
@@ -46,19 +45,34 @@ export function listen(root: string, handle: (request: Request) => Reply): () =>
   return () => {
     server.stop(true);
     rmSync(path, { force: true });
+    rmSync(rootFile, { force: true });
   };
 }
 
-export async function send(root: string, request: Request): Promise<Reply[]> {
+export async function send(request: Request): Promise<Reply[]> {
   const dir = socketDir();
   let names: string[];
   try {
-    names = readdirSync(dir).filter((name) => name.startsWith(prefix(root)) && name.endsWith(".sock"));
+    names = readdirSync(dir).filter((name) => /^\d+\.sock$/.test(name));
   } catch {
     return [];
   }
-  const replies = await Promise.all(names.map((name) => ask(join(dir, name), request)));
+  const viewers = names
+    .map((name) => join(dir, name))
+    .filter((path) => {
+      const root = viewerRoot(path);
+      return root !== undefined && overlaps(root, request.root);
+    });
+  const replies = await Promise.all(viewers.map((path) => ask(path, request)));
   return replies.filter((reply): reply is Reply => reply !== undefined);
+}
+
+function viewerRoot(socketPath: string): string | undefined {
+  try {
+    return readFileSync(socketPath.replace(/\.sock$/, ".root"), "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 const replyTimeoutMs = 2000;
@@ -91,6 +105,7 @@ async function ask(path: string, request: Request): Promise<Reply | undefined> {
     });
   } catch {
     rmSync(path, { force: true });
+    rmSync(path.replace(/\.sock$/, ".root"), { force: true });
     return undefined;
   }
   const timer = setTimeout(() => {
