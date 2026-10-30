@@ -10,7 +10,7 @@ import { watchNotebook } from "./watch.ts";
 
 const usage = `Usage:
   quoll [dir] [--no-follow]           View the notebook for dir (default: the current directory)
-  quoll show <page>[#heading]         Show a page in every quoll viewing this notebook
+  quoll show <page>[#heading]         Show a page in every quoll viewing this notebook; inside qmux, only in this tab
   quoll path                          Print the notebook folder for the current directory
   quoll watch                         Print "changed: <page>" each time a page in the notebook is saved
 
@@ -88,7 +88,7 @@ async function show(options: Options): Promise<number> {
   const request = asFile ? `${asFile}${anchor ? `#${anchor}` : ""}` : target;
   const replies = (await send({ show: request, root })).filter((reply) => !("ignored" in reply));
   if (replies.length === 0) {
-    console.error(`No quoll is open on ${root}`);
+    console.error(`No quoll is open${process.env.QMUX_TAB_DIR ? " in this qmux tab" : ""} on ${root}`);
     return 1;
   }
   const failed = replies.find((reply) => "error" in reply);

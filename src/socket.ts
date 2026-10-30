@@ -6,12 +6,14 @@ import { join } from "node:path";
 export type Request = { show: string; root: string };
 export type Reply = { ok: true } | { error: string } | { ignored: true };
 
-function socketDir(env: Record<string, string | undefined> = process.env): string {
-  return join(env.XDG_RUNTIME_DIR || tmpdir(), "quoll");
+type Env = Record<string, string | undefined>;
+
+function socketDir(env: Env): string {
+  return join(env.QMUX_TAB_DIR || env.XDG_RUNTIME_DIR || tmpdir(), "quoll");
 }
 
-export function listen(root: string, handle: (request: Request) => Reply): () => void {
-  const dir = socketDir();
+export function listen(root: string, handle: (request: Request) => Reply, env: Env = process.env): () => void {
+  const dir = socketDir(env);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, `${process.pid}.sock`);
   const rootFile = join(dir, `${process.pid}.root`);
@@ -49,8 +51,8 @@ export function listen(root: string, handle: (request: Request) => Reply): () =>
   };
 }
 
-export async function send(request: Request): Promise<Reply[]> {
-  const dir = socketDir();
+export async function send(request: Request, env: Env = process.env): Promise<Reply[]> {
+  const dir = socketDir(env);
   let names: string[];
   try {
     names = readdirSync(dir).filter((name) => /^\d+\.sock$/.test(name));
