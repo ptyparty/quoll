@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core";
 import { realpathSync } from "node:fs";
+import { deliverComment } from "./comment.ts";
 import { findNotebook, type Focus, isFile, notebookPath, openNotebook, pageFromPath } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.ts";
@@ -30,7 +31,14 @@ needs a name.
 Inside qmux, show, path, and watch use the notebook the quoll in this tab is
 showing, unless --focus or --dir is given.
 
-Pages are markdown files; links and embeds may use Obsidian syntax.`;
+Pages are markdown files; links and embeds may use Obsidian syntax.
+
+In the viewer, c comments on a block, picked by letter, j/k and Enter, or a click:
+quoll runs QUOLL_COMMENT_COMMAND with a label for the block as its last argument
+(joined with = when the command ends in an option such as --label) and the
+block's file, lines, and source on stdin. Inside qmux, set it to
+"qmux claude compose --from-stdin --label".
+Without it, quoll copies that context to the clipboard.`;
 
 type Options = { dir?: string; focus?: Focus; follow: boolean; positional: string[] };
 
@@ -150,6 +158,7 @@ async function view(root: string, follow: boolean): Promise<number> {
     follow,
     mermaid: new MermaidRenderer(mermaidCacheDir(), findChrome()),
     images: () => terminalImageOutput(renderer.capabilities?.kitty_graphics ?? false),
+    comment: (comment) => deliverComment(comment, { copy: (text) => renderer.copyToClipboardOSC52(text), env: process.env }),
     edit: async (file, line) => {
       await renderer.suspend();
       try {

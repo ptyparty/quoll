@@ -1,3 +1,5 @@
+import { Lexer } from "marked";
+
 export type Block =
   | { kind: "markdown"; text: string; startLine: number; endLine: number }
   | { kind: "image"; target: string; alt: string; startLine: number; endLine: number }
@@ -18,20 +20,19 @@ const wikiLink = /(!?)\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
 const markdownLink = /(?<!!)\[([^\]]+)\]\(<?([^)>\s]+)>?(?:\s+"[^"]*")?\)/g;
 
 export function parseDocument(source: string): Document {
-  const lines = source.split("\n");
+  const lines = source.split(/\r?\n/);
   const blocks: Block[] = [];
   const headings: Heading[] = [];
   const links: Link[] = [];
-  let pending: { lines: string[]; startLine: number } | undefined;
-  const flush = (endLine: number) => {
-    if (pending && pending.lines.some((line) => line.trim() !== "")) {
-      blocks.push({ kind: "markdown", text: pending.lines.join("\n"), startLine: pending.startLine, endLine });
-    }
+  let pending: { lines: string[]; sourceLines: number[] } | undefined;
+  const flush = () => {
+    if (pending && pending.lines.some((line) => line.trim() !== "")) blocks.push(...markdownBlocks(pending.lines, pending.sourceLines));
     pending = undefined;
   };
   const append = (line: string, index: number) => {
-    if (!pending) pending = { lines: [], startLine: index };
+    if (!pending) pending = { lines: [], sourceLines: [] };
     pending.lines.push(line);
+    pending.sourceLines.push(index);
   };
 
   let index = skipFrontmatter(lines);
@@ -48,7 +49,7 @@ export function parseDocument(source: string): Document {
     if (fenceMatch && !inComment && raw.slice(fenceMatch[0].length).trim() === "mermaid") {
       const close = lines.findIndex((candidate, at) => at > index && candidate.trim().startsWith(fenceMatch[1]!));
       const end = close === -1 ? lines.length - 1 : close;
-      flush(index - 1);
+      flush();
       blocks.push({ kind: "mermaid", source: lines.slice(index + 1, close === -1 ? lines.length : close).join("\n"), startLine: index, endLine: end });
       index = end;
       continue;
@@ -65,26 +66,47 @@ export function parseDocument(source: string): Document {
 
     const embed = wikiEmbedLine.exec(line);
     if (embed && imageExtensions.test(embed[1]!.trim())) {
-      flush(index - 1);
+      flush();
       blocks.push({ kind: "image", target: embed[1]!.trim(), alt: embed[2]?.trim() ?? "", startLine: index, endLine: index });
       continue;
     }
     const image = markdownImageLine.exec(line);
     if (image && !isExternal(image[2]!)) {
-      flush(index - 1);
+      flush();
       blocks.push({ kind: "image", target: decodeTarget(image[2]!), alt: image[1]!, startLine: index, endLine: index });
       continue;
     }
     const headingMatch = heading.exec(line);
     if (headingMatch) {
-      flush(index - 1);
+      flush();
       headings.push({ level: headingMatch[1]!.length, text: headingMatch[2]!, line: index });
     }
     links.push(...linksIn(line, index));
     append(rewriteWikiLinks(line), index);
   }
-  flush(lines.length - 1);
+  flush();
   return { blocks, headings, links };
+}
+
+function markdownBlocks(lines: string[], sourceLines: number[]): Block[] {
+  const blocks: Block[] = [];
+  let line = 0;
+  for (const token of new Lexer().lex(lines.join("\n"))) {
+    const start = line;
+    line += newlines(token.raw);
+    const raw = token.raw.trimEnd();
+    if (token.type === "space" || raw.trim() === "") continue;
+    const first = Math.min(start + newlines(token.raw.slice(0, token.raw.length - token.raw.trimStart().length)), lines.length - 1);
+    const last = Math.min(start + newlines(raw), lines.length - 1);
+    blocks.push({ kind: "markdown", text: lines.slice(first, last + 1).join("\n"), startLine: sourceLines[first]!, endLine: sourceLines[last]! });
+  }
+  return blocks;
+}
+
+function newlines(text: string): number {
+  let count = 0;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) count++;
+  return count;
 }
 
 function skipFrontmatter(lines: string[]): number {

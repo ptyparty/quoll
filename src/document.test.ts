@@ -2,15 +2,28 @@ import { describe, expect, test } from "bun:test";
 import { blockAtLine, firstChangedLine, headingKey, parseDocument } from "./document.ts";
 
 describe("parseDocument", () => {
-  test("splits sections at headings and keeps their source lines", () => {
-    const doc = parseDocument("# Plan\nintro\n\n## Rollout\nsteps\n");
-    expect(doc.blocks.map((block) => [block.startLine, block.kind])).toEqual([
-      [0, "markdown"],
-      [3, "markdown"],
+  test("splits markdown into headings, paragraphs, lists and tables, each with its source lines", () => {
+    const doc = parseDocument("# Plan\nintro\n\n## Rollout\nsteps\nmore steps\n\n- one\n- two\n\n| a |\n|---|\n| 1 |\n");
+    expect(doc.blocks.map((block) => [block.startLine, block.endLine, block.kind === "markdown" ? block.text : ""])).toEqual([
+      [0, 0, "# Plan"],
+      [1, 1, "intro"],
+      [3, 3, "## Rollout"],
+      [4, 5, "steps\nmore steps"],
+      [7, 8, "- one\n- two"],
+      [10, 12, "| a |\n|---|\n| 1 |"],
     ]);
     expect(doc.headings).toEqual([
       { level: 1, text: "Plan", line: 0 },
       { level: 2, text: "Rollout", line: 3 },
+    ]);
+  });
+
+  test("reads pages with Windows line endings", () => {
+    const doc = parseDocument("# A\r\nhello\r\nworld\r\n\r\n- x\r\n- y\r\n");
+    expect(doc.blocks.map((block) => [block.startLine, block.endLine, block.kind === "markdown" ? block.text : ""])).toEqual([
+      [0, 0, "# A"],
+      [1, 2, "hello\nworld"],
+      [4, 5, "- x\n- y"],
     ]);
   });
 
@@ -52,9 +65,12 @@ describe("parseDocument", () => {
   test("skips frontmatter and Obsidian comments but not code", () => {
     const doc = parseDocument("---\ntags: [a]\n---\nkeep %%hidden%% this\n%%\nall gone\n%%\n```\n%% code %%\n# not a heading\n```");
     const text = doc.blocks.map((block) => (block.kind === "markdown" ? block.text : "")).join("|");
-    expect(text).toBe("keep  this\n```\n%% code %%\n# not a heading\n```");
+    expect(text).toBe("keep  this|```\n%% code %%\n# not a heading\n```");
     expect(doc.headings).toEqual([]);
-    expect(doc.blocks[0]!.startLine).toBe(3);
+    expect(doc.blocks.map((block) => [block.startLine, block.endLine])).toEqual([
+      [3, 3],
+      [7, 10],
+    ]);
   });
 });
 
@@ -70,8 +86,9 @@ describe("firstChangedLine", () => {
 
 test("blockAtLine picks the block that starts at or before a line", () => {
   const doc = parseDocument("# A\none\n# B\ntwo\nthree");
-  expect(blockAtLine(doc.blocks, 4)).toBe(1);
-  expect(blockAtLine(doc.blocks, 1)).toBe(0);
+  expect(blockAtLine(doc.blocks, 4)).toBe(3);
+  expect(blockAtLine(doc.blocks, 1)).toBe(1);
+  expect(blockAtLine(doc.blocks, 0)).toBe(0);
 });
 
 test("headingKey matches Obsidian and slug anchors", () => {

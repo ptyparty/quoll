@@ -1,4 +1,4 @@
-import { BoxRenderable, MarkdownRenderable, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
+import { BoxRenderable, MarkdownRenderable, MouseButton, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { blockAtLine, firstChangedLine, headingKey, parseDocument, type Block, type Document } from "../document.ts";
@@ -8,6 +8,7 @@ import type { MermaidRenderer } from "../render/mermaid.ts";
 import { styled, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
 import { contains, indexPage, listFiles, listPages, overlaps, resolveAsset, resolveTarget } from "../notebook.ts";
+import { commentContext, type Comment } from "../comment.ts";
 import type { Reply } from "../socket.ts";
 import { History } from "./history.ts";
 import { PickerState, PickerView, pickerKey, type PickerItem } from "./picker.ts";
@@ -18,14 +19,18 @@ export type ViewerOptions = {
   edit: (file: string, line: number) => Promise<void>;
   follow: boolean;
   mermaid?: MermaidRenderer;
+  comment?: (comment: Comment) => Promise<string>;
 };
 
 type Picker = { state: PickerState<() => void> };
+type BlockFrame = { frame: BoxRenderable; gutter: TextRenderable };
+type Commenting = { selected: number; hints: Map<string, number>; top: number | undefined; settleFrames: number };
 type Upload = { key: string; id: number; cols: number; rows: number };
 
 const imageMargin = { cols: 4, rows: 4 };
 const imageFile = /\.(png|jpe?g|gif|webp)$/i;
 const followContext = 2;
+const hintLetters = "asdfghlzxcvbnmertyuiopw";
 
 export class Viewer {
   private readonly scroll: ScrollBoxRenderable;
@@ -38,7 +43,9 @@ export class Viewer {
   private readonly uploaded = new Map<string, Upload>();
   private readonly deferred = new Set<string>();
   private document: Document = { blocks: [], headings: [], links: [] };
-  private blockViews: Renderable[] = [];
+  private blockViews: BoxRenderable[] = [];
+  private gutters: TextRenderable[] = [];
+  private commenting: Commenting | undefined;
   private picker: Picker | undefined;
   private following: boolean;
   private pendingScroll: { line: number } | { top: number } | undefined;
@@ -219,8 +226,26 @@ export class Viewer {
       view.destroyRecursively();
     }
     const files = this.lazyFiles();
-    this.blockViews = this.document.blocks.map((block, index) => this.blockView(block, page, index, files));
+    this.commenting = undefined;
+    const frames = this.document.blocks.map((block, index) => this.blockFrame(this.blockView(block, page, files), index));
+    this.blockViews = frames.map(({ frame }) => frame);
+    this.gutters = frames.map(({ gutter }) => gutter);
     for (const view of this.blockViews) this.scroll.add(view);
+  }
+
+  private blockFrame(view: Renderable, index: number): BlockFrame {
+    const frame = new BoxRenderable(this.renderer, {
+      flexDirection: "row",
+      marginTop: index === 0 ? 0 : 1,
+      flexShrink: 0,
+      onMouseDown: (event) => {
+        if (event.button === MouseButton.LEFT && this.commenting && !this.picker && !this.editing && this.page) void this.comment(index);
+      },
+    });
+    const gutter = new TextRenderable(this.renderer, { content: "", width: 0, flexShrink: 0, wrapMode: "none" });
+    frame.add(gutter);
+    frame.add(view);
+    return { frame, gutter };
   }
 
   private lazyFiles(): () => string[] {
@@ -228,12 +253,11 @@ export class Viewer {
     return () => (files ??= listFiles(this.options.root));
   }
 
-  private blockView(block: Block, page: string | undefined, index: number, files: () => string[]): Renderable {
-    const marginTop = index === 0 ? 0 : 1;
+  private blockView(block: Block, page: string | undefined, files: () => string[]): Renderable {
     if (block.kind === "markdown") {
-      return new MarkdownRenderable(this.renderer, { content: block.text, syntaxStyle: this.style, marginTop, tableOptions: { widthMode: "content", cellPaddingX: 1 } });
+      return new MarkdownRenderable(this.renderer, { content: block.text, syntaxStyle: this.style, flexGrow: 1, flexShrink: 1, tableOptions: { widthMode: "content", cellPaddingX: 1 } });
     }
-    const box = new BoxRenderable(this.renderer, { flexDirection: "column", marginTop, flexShrink: 0 });
+    const box = new BoxRenderable(this.renderer, { flexDirection: "column", flexGrow: 1, flexShrink: 1 });
     const images = this.options.images();
     if (block.kind === "mermaid") return this.diagramView(box, block.source, page, images);
     const path = page ? resolveAsset(this.options.root, page, block.target, files) : undefined;
@@ -302,6 +326,7 @@ export class Viewer {
       if (this.settleFrames <= 0) this.pendingScroll = undefined;
       this.renderer.requestRender();
     }
+    this.settleHints();
     if (this.message && Date.now() > this.message.until) {
       this.message = undefined;
       this.renderStatus();
@@ -350,6 +375,11 @@ export class Viewer {
       this.renderer.requestRender();
       return;
     }
+    if (this.commenting) {
+      this.commentKey(key);
+      this.renderer.requestRender();
+      return;
+    }
     const half = Math.max(Math.floor(this.scroll.height / 2), 1);
     const scrollBy = (delta: number) => {
       this.scroll.scrollBy(delta);
@@ -373,6 +403,7 @@ export class Viewer {
     else if (key.name === "w") this.toggleFollow();
     else if (key.name === "e") void this.edit();
     else if (key.name === "r") this.reload();
+    else if (key.name === "c") this.startCommenting();
     else return;
     this.renderer.requestRender();
   };
@@ -467,6 +498,99 @@ export class Viewer {
     this.renderer.requestRender();
   }
 
+  private startCommenting(): void {
+    if (!this.page || this.blockViews.length === 0) return;
+    this.stopFollowing();
+    this.commenting = { selected: this.visibleBlocks()[0] ?? 0, hints: new Map(), top: undefined, settleFrames: 3 };
+    this.renderHints();
+  }
+
+  private settleHints(): void {
+    const commenting = this.commenting;
+    if (!commenting) return;
+    if (commenting.settleFrames > 0) {
+      commenting.settleFrames--;
+      this.renderer.requestRender();
+      if (commenting.settleFrames > 0) return;
+    } else if (commenting.top === this.scroll.scrollTop) {
+      return;
+    }
+    this.assignHints();
+  }
+
+  private assignHints(): void {
+    const commenting = this.commenting!;
+    const visible = this.visibleBlocks();
+    if (!visible.includes(commenting.selected)) commenting.selected = visible[0] ?? Math.max(commenting.selected, 0);
+    commenting.hints = new Map(visible.slice(0, hintLetters.length).map((index, at) => [hintLetters[at]!, index]));
+    commenting.top = this.scroll.scrollTop;
+    this.renderHints();
+    this.renderer.requestRender();
+  }
+
+  private commentKey(key: KeyEvent): void {
+    const commenting = this.commenting!;
+    const last = this.blockViews.length - 1;
+    if (key.name === "escape" || key.name === "q" || (key.ctrl && key.name === "c")) this.stopCommenting();
+    else if (key.name === "j" || key.name === "down") this.selectBlock(Math.min(commenting.selected + 1, last));
+    else if (key.name === "k" || key.name === "up") this.selectBlock(Math.max(commenting.selected - 1, 0));
+    else if (key.name === "return") void this.comment(commenting.selected);
+    else if (key.name && !key.ctrl && commenting.hints.has(key.name)) void this.comment(commenting.hints.get(key.name)!);
+  }
+
+  private selectBlock(index: number): void {
+    this.commenting!.selected = index;
+    const top = this.blockTop(index);
+    const bottom = top + (this.blockViews[index]?.height ?? 1);
+    if (top < this.scroll.scrollTop) this.scroll.scrollTo(top);
+    else if (bottom > this.scroll.scrollTop + this.scroll.height) this.scroll.scrollTo(Math.max(bottom - this.scroll.height, top - this.scroll.height + 1, 0));
+    this.assignHints();
+  }
+
+  private stopCommenting(): void {
+    this.commenting = undefined;
+    this.renderHints();
+  }
+
+  private renderHints(): void {
+    const commenting = this.commenting;
+    const letters = new Map([...(commenting?.hints ?? [])].map(([letter, index]) => [index, letter]));
+    this.gutters.forEach((gutter, index) => {
+      const selected = commenting?.selected === index;
+      gutter.width = commenting ? 2 : 0;
+      gutter.content = commenting ? styled([selected ? bold(fg(theme.selected)(letters.get(index) ?? "▌")) : fg(theme.accent)(letters.get(index) ?? " ")]) : "";
+      this.blockViews[index]!.backgroundColor = selected ? theme.surface : "transparent";
+    });
+    this.renderStatus();
+  }
+
+  private visibleBlocks(): number[] {
+    const top = this.scroll.scrollTop;
+    const bottom = top + this.scroll.height;
+    return this.blockViews.flatMap((view, index) => {
+      const start = this.blockTop(index);
+      return start < bottom && start + view.height > top ? [index] : [];
+    });
+  }
+
+  private blockTop(index: number): number {
+    return (this.blockViews[index]?.y ?? 0) - this.scroll.content.y;
+  }
+
+  private async comment(index: number): Promise<void> {
+    const page = this.page;
+    const block = this.document.blocks[index];
+    this.stopCommenting();
+    if (!page || !block) return;
+    const send = this.options.comment;
+    if (!send) return;
+    const asset = block.kind === "image" ? resolveAsset(this.options.root, page, block.target, this.lazyFiles()) : undefined;
+    const source = this.known.get(page) ?? "";
+    const comment = commentContext({ page, file: join(this.options.root, page), source, block, headings: this.document.headings, ...(asset ? { asset } : {}) });
+    this.flash(await send(comment).catch((error: Error) => `Could not comment: ${error.message}`));
+    this.renderer.requestRender();
+  }
+
   private flash(text: string): void {
     this.message = { text, until: Date.now() + 4000 };
     this.renderStatus();
@@ -475,7 +599,8 @@ export class Viewer {
   private renderStatus(): void {
     const page = this.page ?? "notebook";
     const follow = this.following ? fg(theme.follow)(" ◉ following") : fg(theme.muted)(" ○ not following");
-    const right = this.message ? fg(theme.warning)(this.message.text) : fg(theme.muted)("f links · p pages · o outline · e edit · H/L back/fwd · w follow · q quit");
+    const help = this.commenting ? "comment on: a letter, or j/k and Enter · click · Esc cancel" : "c comment · f links · p pages · o outline · e edit · H/L back/fwd · w follow · q quit";
+    const right = this.message ? fg(theme.warning)(this.message.text) : fg(this.commenting ? theme.selected : theme.muted)(help);
     this.status.content = styled([bold(fg(theme.accent)(` ${page}`)), follow, "   ", right]);
   }
 }
