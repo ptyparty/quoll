@@ -5,13 +5,15 @@
 A terminal viewer for a story's design notebook: a folder of markdown pages and images, readable in Obsidian too.
 
 ```
-quoll [dir] [--no-follow]    view the notebook
-quoll show <page>[#heading]  make the open viewers show a page
-quoll path                   print the notebook folder for the current directory
-quoll watch                  print "changed: <page>" each time a page is saved
+quoll [dir] [--focus [name]] [--no-follow]  view the notebook
+quoll show <page>[#heading]                 make the open viewers show a page
+quoll path                                  print the notebook folder
+quoll watch                                 print "changed: <page>" each time a page is saved
 ```
 
-Set `QUOLL_DIR` to the notebook root, which holds a folder per story: from `~/work/stories/sc-123`, the notebook is `$QUOLL_DIR/sc-123`, and `quoll $QUOLL_DIR` browses them all. `--dir` overrides it for one run. Without it, quoll uses the nearest `notebook/` folder.
+Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll` browses them all; `quoll --focus sc-123` opens `$QUOLL_DIR/sc-123`, creating it when it's missing; and a bare `--focus` names the notebook after the current directory, so from `~/work/stories/sc-123` it opens `$QUOLL_DIR/sc-123`. `--dir` overrides `QUOLL_DIR` for one run. Without it, the notebook is the current directory, or the one named on the command line.
+
+Inside qmux, `quoll show`, `quoll path` and `quoll watch` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
 
 Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `o` outline · `i` index · `H`/`L` back and forward · `e` edit in helix · `w` follow · `r` reload · `q` quit.
 

@@ -1,40 +1,49 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core";
-import { mkdirSync, realpathSync } from "node:fs";
-import { findNotebook, isFile, pageFromPath } from "./notebook.ts";
+import { realpathSync } from "node:fs";
+import { findNotebook, type Focus, isFile, openNotebook, pageFromPath } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.ts";
-import { listen, send } from "./socket.ts";
+import { listen, send, tabViewerRoot } from "./socket.ts";
 import { Viewer } from "./viewer/viewer.ts";
 import { watchNotebook } from "./watch.ts";
 
 const usage = `Usage:
-  quoll [dir] [--no-follow]           View the notebook for dir (default: the current directory)
+  quoll [dir] [--no-follow]           View the notebook (default: $QUOLL_DIR, or the current directory)
   quoll show <page>[#heading]         Show a page in every quoll viewing this notebook; inside qmux, only in this tab
-  quoll path                          Print the notebook folder for the current directory
+  quoll path                          Print the notebook folder
   quoll watch                         Print "changed: <page>" each time a page in the notebook is saved
 
 Options:
+  --focus [name]   Open the notebook $QUOLL_DIR/<name>; without a name, the
+                   current directory's name (or dir's, when given)
   --dir <folder>   The notebook root for this run, overriding QUOLL_DIR
 
-QUOLL_DIR is the notebook root, which holds a folder per story. Inside it, a
-folder is used as is, so quoll $QUOLL_DIR browses every story. Anywhere else the
-notebook is $QUOLL_DIR/<story>, where <story> is the directory under the
-outermost "stories" directory above the current one.
+QUOLL_DIR is the notebook root, which holds a folder per notebook. quoll opens
+the whole root, so it browses every notebook, and --focus opens one of them,
+creating it when it is missing. A dir given on the command line is used as is.
 
-Without QUOLL_DIR, the notebook is the nearest folder named notebook, or a
-notebook/ folder in the nearest directory that has one.
+Without QUOLL_DIR, the notebook is the current directory, or dir.
+
+Inside qmux, show, path, and watch use the notebook the quoll in this tab is
+showing, unless --focus or --dir is given.
 
 Pages are markdown files; links and embeds may use Obsidian syntax.`;
 
-type Options = { dir?: string; follow: boolean; positional: string[] };
+type Options = { dir?: string; focus?: Focus; follow: boolean; positional: string[] };
+
+const commands = ["show", "path", "watch"];
 
 function parseOptions(args: string[]): Options | undefined {
   const options: Options = { follow: true, positional: [] };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     if (arg === "--no-follow") options.follow = false;
-    else if (arg === "--dir") {
+    else if (arg.startsWith("--focus=")) options.focus = arg.slice("--focus=".length);
+    else if (arg === "--focus") {
+      const name = args[index + 1];
+      options.focus = name && !name.startsWith("-") && !commands.includes(name) ? args[++index]! : true;
+    } else if (arg === "--dir") {
       const dir = args[++index];
       if (!dir) return undefined;
       options.dir = dir;
@@ -44,8 +53,22 @@ function parseOptions(args: string[]): Options | undefined {
   return options;
 }
 
-function notebookFor(options: Options, start: string): string {
-  return findNotebook(start, options.dir ?? process.env.QUOLL_DIR);
+function notebookRoot(options: Options): string | undefined {
+  return options.dir ?? process.env.QUOLL_DIR;
+}
+
+function viewedNotebook(options: Options): string {
+  if (options.dir === undefined && options.focus === undefined) {
+    const viewed = tabViewerRoot();
+    if (viewed) return viewed;
+  }
+  return findNotebook(process.cwd(), notebookRoot(options), options.focus);
+}
+
+function notebookToView(options: Options): string {
+  const dir = options.positional[0];
+  if (dir !== undefined && options.focus === undefined) return findNotebook(dir);
+  return findNotebook(dir ?? process.cwd(), notebookRoot(options), options.focus);
 }
 
 async function main(args: string[]): Promise<number> {
@@ -58,22 +81,31 @@ async function main(args: string[]): Promise<number> {
     console.error(usage);
     return 2;
   }
-  const command = ["show", "path", "watch"].includes(options.positional[0] ?? "") ? options.positional.shift() : undefined;
+  try {
+    return await run(options);
+  } catch (error) {
+    console.error(`quoll: ${(error as Error).message}`);
+    return 1;
+  }
+}
+
+async function run(options: Options): Promise<number> {
+  const command = commands.includes(options.positional[0] ?? "") ? options.positional.shift() : undefined;
   if (command === "show") return show(options);
   if ((command === "path" || command === "watch") && options.positional.length > 0) {
     console.error(usage);
     return 2;
   }
   if (command === "path") {
-    console.log(notebookFor(options, process.cwd()));
+    console.log(viewedNotebook(options));
     return 0;
   }
-  if (command === "watch") return watchPages(notebookFor(options, process.cwd()));
+  if (command === "watch") return watchPages(openNotebook(viewedNotebook(options), notebookRoot(options)));
   if (options.positional.length > 1) {
     console.error(usage);
     return 2;
   }
-  return view(notebookFor(options, options.positional[0] ?? process.cwd()), options.follow);
+  return view(openNotebook(notebookToView(options), notebookRoot(options)), options.follow);
 }
 
 async function show(options: Options): Promise<number> {
@@ -82,7 +114,7 @@ async function show(options: Options): Promise<number> {
     console.error(usage);
     return 2;
   }
-  const root = notebookFor(options, process.cwd());
+  const root = viewedNotebook(options);
   const [path, anchor] = target.split(/#(.*)/s, 2);
   const asFile = path?.endsWith(".md") && isFile(path) ? pageFromPath(root, process.cwd(), realpathSync(path)) : undefined;
   const request = asFile ? `${asFile}${anchor ? `#${anchor}` : ""}` : target;
@@ -100,8 +132,7 @@ async function show(options: Options): Promise<number> {
 }
 
 async function watchPages(root: string): Promise<number> {
-  mkdirSync(root, { recursive: true });
-  const stop = watchNotebook(realpathSync(root), 500, (filename) => {
+  const stop = watchNotebook(root, 500, (filename) => {
     if (filename.endsWith(".md")) console.log(`changed: ${filename}`);
   });
   await new Promise<void>((resolve) => {
@@ -112,8 +143,6 @@ async function watchPages(root: string): Promise<number> {
 }
 
 async function view(root: string, follow: boolean): Promise<number> {
-  mkdirSync(root, { recursive: true });
-  root = realpathSync(root);
   const renderer = await createCliRenderer({ exitOnCtrlC: false, exitSignals: [], useMouse: true });
   const viewer = new Viewer(renderer, {
     root,

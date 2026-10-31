@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { overlaps } from "./notebook.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,6 +67,41 @@ export async function send(request: Request, env: Env = process.env): Promise<Re
     });
   const replies = await Promise.all(viewers.map((path) => ask(path, request)));
   return replies.filter((reply): reply is Reply => reply !== undefined);
+}
+
+export function tabViewerRoot(env: Env = process.env): string | undefined {
+  if (!env.QMUX_TAB_DIR) return undefined;
+  const dir = socketDir(env);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => /^\d+\.root$/.test(name));
+  } catch {
+    return undefined;
+  }
+  return names
+    .filter((name) => isRunning(Number.parseInt(name, 10)))
+    .map((name) => join(dir, name))
+    .map((path) => ({ path, modified: modifiedTime(path) }))
+    .sort((a, b) => b.modified - a.modified)
+    .map(({ path }) => viewerRoot(path))
+    .find((root) => root !== undefined);
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function modifiedTime(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
 }
 
 function viewerRoot(socketPath: string): string | undefined {

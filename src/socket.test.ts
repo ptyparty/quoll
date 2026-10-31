@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listen, send } from "./socket.ts";
+import { listen, send, tabViewerRoot } from "./socket.ts";
 
 let dir: string;
 const stops: (() => void)[] = [];
@@ -40,4 +40,20 @@ test("inside qmux, show reaches only the viewers in the same tab", async () => {
   expect(await send({ show: "index", root: "/notebook" }, runtime)).toEqual([{ ok: true }]);
   expect(await send({ show: "decisions", root: "/notebook" }, { ...runtime, QMUX_TAB_DIR: join(dir, "tab-c") })).toEqual([]);
   expect([...inA, ...inB, ...outside]).toEqual(["a: plan", "outside: index"]);
+});
+
+test("tabViewerRoot names the notebook a running viewer in this tab shows", async () => {
+  dir = realpathSync(mkdtempSync(join(tmpdir(), "quoll-socket-")));
+  const runtime = { XDG_RUNTIME_DIR: join(dir, "runtime") };
+  const tab = { ...runtime, QMUX_TAB_DIR: join(dir, "tab") };
+  expect(tabViewerRoot(tab)).toBeUndefined();
+  viewer("outside", runtime);
+  expect(tabViewerRoot(runtime)).toBeUndefined();
+  viewer("in tab", tab);
+  expect(tabViewerRoot(tab)).toBe("/notebook");
+
+  const stale = join(dir, "tab", "quoll", "999999999.root");
+  writeFileSync(stale, "/stale");
+  utimesSync(stale, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+  expect(tabViewerRoot(tab)).toBe("/notebook");
 });
