@@ -1,6 +1,6 @@
-# quoll
+<p align="center"><img src="docs/quoll.svg" alt="A midnight-blue notebook with a gold paw print on its cover, bound by a furry chocolate quoll tail with three cream spots" width="170"></p>
 
-<p align="center"><img src="docs/quoll.svg" alt="A cartoon spotted-tailed quoll sitting up, chestnut brown with white spots" width="240"></p>
+<h1 align="center">quoll</h1>
 
 A terminal viewer for a story's design notebook: a folder of markdown pages and images, readable in Obsidian too.
 
