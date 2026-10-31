@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listen, send, tabViewerRoot } from "./socket.ts";
@@ -52,8 +52,10 @@ test("tabViewerRoot names the notebook a running viewer in this tab shows", asyn
   viewer("in tab", tab);
   expect(tabViewerRoot(tab)).toBe("/notebook");
 
-  const stale = join(dir, "tab", "quoll", "999999999.root");
-  writeFileSync(stale, "/stale");
-  utimesSync(stale, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+  const stale = join(dir, "tab", "quoll", "999999999");
+  writeFileSync(`${stale}.sock`, "");
+  writeFileSync(`${stale}.root`, "/stale");
+  utimesSync(`${stale}.root`, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
   expect(tabViewerRoot(tab)).toBe("/notebook");
+  expect(existsSync(`${stale}.sock`) || existsSync(`${stale}.root`)).toBe(false);
 });

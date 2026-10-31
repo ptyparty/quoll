@@ -52,39 +52,43 @@ export function listen(root: string, handle: (request: Request) => Reply, env: E
 }
 
 export async function send(request: Request, env: Env = process.env): Promise<Reply[]> {
-  const dir = socketDir(env);
-  let names: string[];
-  try {
-    names = readdirSync(dir).filter((name) => /^\d+\.sock$/.test(name));
-  } catch {
-    return [];
-  }
-  const viewers = names
-    .map((name) => join(dir, name))
-    .filter((path) => {
-      const root = viewerRoot(path);
-      return root !== undefined && overlaps(root, request.root);
-    });
-  const replies = await Promise.all(viewers.map((path) => ask(path, request)));
+  const matching = viewers(socketDir(env)).filter((viewer) => overlaps(viewer.root, request.root));
+  const replies = await Promise.all(matching.map((viewer) => ask(viewer.socket, request)));
   return replies.filter((reply): reply is Reply => reply !== undefined);
 }
 
 export function tabViewerRoot(env: Env = process.env): string | undefined {
   if (!env.QMUX_TAB_DIR) return undefined;
-  const dir = socketDir(env);
+  return viewers(socketDir(env)).sort((a, b) => b.started - a.started)[0]?.root;
+}
+
+type RunningViewer = { socket: string; root: string; started: number };
+
+function viewers(dir: string): RunningViewer[] {
   let names: string[];
   try {
-    names = readdirSync(dir).filter((name) => /^\d+\.root$/.test(name));
+    names = readdirSync(dir).filter((name) => /^[1-9]\d*\.sock$/.test(name));
   } catch {
-    return undefined;
+    return [];
   }
-  return names
-    .filter((name) => isRunning(Number.parseInt(name, 10)))
-    .map((name) => join(dir, name))
-    .map((path) => ({ path, modified: modifiedTime(path) }))
-    .sort((a, b) => b.modified - a.modified)
-    .map(({ path }) => viewerRoot(path))
-    .find((root) => root !== undefined);
+  return names.flatMap((name) => {
+    const socket = join(dir, name);
+    if (!isRunning(Number.parseInt(name, 10))) {
+      forget(socket);
+      return [];
+    }
+    const root = viewerRoot(socket);
+    return root === undefined ? [] : [{ socket, root, started: modifiedTime(rootFileOf(socket)) }];
+  });
+}
+
+function forget(socket: string) {
+  rmSync(socket, { force: true });
+  rmSync(rootFileOf(socket), { force: true });
+}
+
+function rootFileOf(socket: string): string {
+  return socket.replace(/\.sock$/, ".root");
 }
 
 function isRunning(pid: number): boolean {
@@ -106,7 +110,7 @@ function modifiedTime(path: string): number {
 
 function viewerRoot(socketPath: string): string | undefined {
   try {
-    return readFileSync(socketPath.replace(/\.sock$/, ".root"), "utf8");
+    return readFileSync(rootFileOf(socketPath), "utf8");
   } catch {
     return undefined;
   }
@@ -141,8 +145,7 @@ async function ask(path: string, request: Request): Promise<Reply | undefined> {
       },
     });
   } catch {
-    rmSync(path, { force: true });
-    rmSync(path.replace(/\.sock$/, ".root"), { force: true });
+    forget(path);
     return undefined;
   }
   const timer = setTimeout(() => {

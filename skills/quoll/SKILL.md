@@ -9,7 +9,7 @@ The user reads the notebook in quoll, a terminal viewer that usually sits beside
 
 ## Where it lives
 
-Run `quoll path`; it prints the notebook folder, which is usually outside the story directory (a folder under the user's notebook root). Inside qmux it prints the notebook the quoll in your tab is showing, so it works from anywhere in the tab, including inside one of the story's repos. Outside qmux, or with no quoll open in the tab, run it from the story directory: `quoll path --focus` names the notebook after the current directory. Create the folder if it is missing. Keep `index.md` as the entry page: a short summary of the work and links to every other page, since quoll opens it first.
+Run `quoll path`; it prints the notebook folder, which is usually outside the story directory (a folder under the user's notebook root). Inside qmux it prints the notebook the quoll in your tab is showing, so it works from anywhere in the tab, including inside one of the story's repos. Outside qmux, or with no quoll open in the tab, run `quoll path`, `quoll show` and `quoll watch` from the story directory with `--focus`, which names the notebook after the current directory; without it they use the whole notebook root. Create the folder if it is missing. Keep `index.md` as the entry page: a short summary of the work and links to every other page, since quoll opens it first.
 
 ## What goes in
 
@@ -53,3 +53,4 @@ quoll watch
 It prints `changed: <page>` each time a page is saved and runs until stopped. Start it with the Monitor tool, which turns each line into a notification. A background shell command would have to exit to report a change, and in qmux every restart shows up as a new job.
 
 Monitor stops a watch after at most 30 minutes; start it again when it does. Your own writes are reported too, so skip pages you have just written. When the user changes a page, read it, act on what they wrote, and fold answers into the page: move a settled question into `decisions.md`, or update the plan.
+

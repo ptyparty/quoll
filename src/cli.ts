@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core";
 import { realpathSync } from "node:fs";
-import { findNotebook, type Focus, isFile, openNotebook, pageFromPath } from "./notebook.ts";
+import { findNotebook, type Focus, isFile, notebookPath, openNotebook, pageFromPath } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.ts";
 import { listen, send, tabViewerRoot } from "./socket.ts";
@@ -15,15 +15,17 @@ const usage = `Usage:
   quoll watch                         Print "changed: <page>" each time a page in the notebook is saved
 
 Options:
-  --focus [name]   Open the notebook $QUOLL_DIR/<name>; without a name, the
+  --focus          Open the notebook $QUOLL_DIR/<name>, where <name> is the
                    current directory's name (or dir's, when given)
+  --focus=<name>   Open the notebook $QUOLL_DIR/<name>
   --dir <folder>   The notebook root for this run, overriding QUOLL_DIR
 
 QUOLL_DIR is the notebook root, which holds a folder per notebook. quoll opens
 the whole root, so it browses every notebook, and --focus opens one of them,
 creating it when it is missing. A dir given on the command line is used as is.
 
-Without QUOLL_DIR, the notebook is the current directory, or dir.
+Without QUOLL_DIR, the notebook root is the current directory, and --focus
+needs a name.
 
 Inside qmux, show, path, and watch use the notebook the quoll in this tab is
 showing, unless --focus or --dir is given.
@@ -32,18 +34,14 @@ Pages are markdown files; links and embeds may use Obsidian syntax.`;
 
 type Options = { dir?: string; focus?: Focus; follow: boolean; positional: string[] };
 
-const commands = ["show", "path", "watch"];
-
 function parseOptions(args: string[]): Options | undefined {
   const options: Options = { follow: true, positional: [] };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     if (arg === "--no-follow") options.follow = false;
     else if (arg.startsWith("--focus=")) options.focus = arg.slice("--focus=".length);
-    else if (arg === "--focus") {
-      const name = args[index + 1];
-      options.focus = name && !name.startsWith("-") && !commands.includes(name) ? args[++index]! : true;
-    } else if (arg === "--dir") {
+    else if (arg === "--focus") options.focus = true;
+    else if (arg === "--dir") {
       const dir = args[++index];
       if (!dir) return undefined;
       options.dir = dir;
@@ -53,8 +51,8 @@ function parseOptions(args: string[]): Options | undefined {
   return options;
 }
 
-function notebookRoot(options: Options): string | undefined {
-  return options.dir ?? process.env.QUOLL_DIR;
+function notebookRoot(options: Options): string {
+  return options.dir ?? process.env.QUOLL_DIR ?? process.cwd();
 }
 
 function viewedNotebook(options: Options): string {
@@ -67,7 +65,7 @@ function viewedNotebook(options: Options): string {
 
 function notebookToView(options: Options): string {
   const dir = options.positional[0];
-  if (dir !== undefined && options.focus === undefined) return findNotebook(dir);
+  if (dir !== undefined && options.focus === undefined) return notebookPath(dir);
   return findNotebook(dir ?? process.cwd(), notebookRoot(options), options.focus);
 }
 
@@ -90,7 +88,10 @@ async function main(args: string[]): Promise<number> {
 }
 
 async function run(options: Options): Promise<number> {
-  const command = commands.includes(options.positional[0] ?? "") ? options.positional.shift() : undefined;
+  if (options.focus === true && options.dir === undefined && !process.env.QUOLL_DIR) {
+    throw new Error("--focus without a name needs QUOLL_DIR or --dir; use --focus=<name> to open ./<name>");
+  }
+  const command = ["show", "path", "watch"].includes(options.positional[0] ?? "") ? options.positional.shift() : undefined;
   if (command === "show") return show(options);
   if ((command === "path" || command === "watch") && options.positional.length > 0) {
     console.error(usage);
