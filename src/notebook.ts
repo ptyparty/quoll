@@ -11,25 +11,24 @@ export type Target = { page: string; anchor?: string };
 
 export type Focus = string | true;
 
-export function findNotebook(start: string, notebookRoot?: string, focus?: Focus): string {
-  if (!notebookRoot) return realOrResolved(start);
-  const root = notebookRootPath(notebookRoot);
+export function findNotebook(start: string, notebookRoot: string, focus?: Focus): string {
+  const root = notebookPath(notebookRoot);
   if (focus === undefined) return root;
   const name = focus === true ? basename(resolve(start)) : focus;
   if (!isNotebookName(name)) throw new Error(`Not a notebook name: "${name}"`);
   return join(root, name);
 }
 
-export function notebookRootPath(notebookRoot: string): string {
-  return realOrResolved(expandHome(notebookRoot));
+export function notebookPath(path: string): string {
+  return realOrResolved(expandHome(path));
 }
 
 function isNotebookName(name: string): boolean {
   return name !== "" && name !== "." && name !== ".." && !name.includes("/") && !name.includes(sep);
 }
 
-export function openNotebook(notebook: string, notebookRoot?: string): string {
-  if (notebookRoot && contains(notebookRootPath(notebookRoot), notebook)) mkdirSync(notebook, { recursive: true });
+export function openNotebook(notebook: string, notebookRoot: string): string {
+  if (contains(notebookPath(notebookRoot), realOrResolved(notebook))) mkdirSync(notebook, { recursive: true });
   else if (!isDirectory(notebook)) throw new Error(`No notebook folder at ${notebook}`);
   return realpathSync(notebook);
 }
@@ -39,10 +38,12 @@ function expandHome(path: string): string {
 }
 
 function realOrResolved(path: string): string {
+  const resolved = resolve(path);
   try {
-    return realpathSync(path);
+    return realpathSync(resolved);
   } catch {
-    return resolve(path);
+    const parent = dirname(resolved);
+    return parent === resolved ? resolved : join(realOrResolved(parent), basename(resolved));
   }
 }
 

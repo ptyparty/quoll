@@ -20,11 +20,6 @@ beforeEach(() => {
 afterEach(() => rmSync(story, { recursive: true, force: true }));
 
 describe("findNotebook", () => {
-  test("without a notebook root, uses the start directory as it is", () => {
-    expect(findNotebook(story)).toBe(story);
-    expect(findNotebook(join(story, "repo", "src"), undefined, "sc-1")).toBe(join(story, "repo", "src"));
-  });
-
   test("with a notebook root and no focus, uses the whole root", () => {
     const notes = join(story, "notes");
     expect(findNotebook(join(story, "work", "stories", "sc-1"), notes)).toBe(notes);
@@ -62,9 +57,15 @@ describe("openNotebook", () => {
     expect(isDirectory(join(notes, "sc-1"))).toBe(true);
   });
 
+  test("creates a missing notebook reached through a symlink to the notebook root", () => {
+    const notes = join(story, "notes");
+    mkdirSync(notes);
+    symlinkSync(notes, join(story, "linked"));
+    expect(openNotebook(join(story, "linked", "sc-1"), notes)).toBe(join(notes, "sc-1"));
+  });
+
   test("creates nothing outside the notebook root", () => {
-    expect(openNotebook(story)).toBe(story);
-    expect(() => openNotebook(join(story, "missing"))).toThrow();
+    expect(openNotebook(story, join(story, "notes"))).toBe(story);
     expect(() => openNotebook(join(story, "missing"), join(story, "notes"))).toThrow();
     expect(isDirectory(join(story, "missing"))).toBe(false);
   });
