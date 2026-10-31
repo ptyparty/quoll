@@ -9,7 +9,7 @@ The user reads the notebook in quoll, a terminal viewer that usually sits beside
 
 ## Where it lives
 
-Run `quoll path` from the story directory; it prints the notebook folder, which is usually outside the story directory (a folder per story under the user's notebook root). Create the folder if it is missing. Keep `index.md` as the entry page: a short summary of the work and links to every other page, since quoll opens it first.
+Run `quoll path`; it prints the notebook folder, which is usually outside the story directory (a folder under the user's notebook root). Inside qmux it prints the notebook the quoll in your tab is showing, so it works from anywhere in the tab, including inside one of the story's repos. Outside qmux, or with no quoll open in the tab, run it from the story directory: `quoll path --focus` names the notebook after the current directory. Create the folder if it is missing. Keep `index.md` as the entry page: a short summary of the work and links to every other page, since quoll opens it first.
 
 ## What goes in
 
@@ -38,7 +38,7 @@ quoll show plan#Rollout
 quoll show notebook/decisions.md
 ```
 
-The target is a page name or path (relative to the notebook, or a file path) with an optional `#Heading`. Run it from the story directory so it finds the same notebook as `quoll path`. Every quoll open on this notebook, or on a folder that contains it, jumps there. Use it when you want the user to read a particular section, not after every write; follow mode already shows them what you are writing. Showing a page turns follow mode off, so the user stays on it until they turn follow back on.
+The target is a page name or path (relative to the notebook, or a file path) with an optional `#Heading`. It finds the same notebook as `quoll path`. Every quoll open on this notebook, or on a folder that contains it, jumps there. Use it when you want the user to read a particular section, not after every write; follow mode already shows them what you are writing. Showing a page turns follow mode off, so the user stays on it until they turn follow back on.
 
 Exit status 1 with "No quoll is open" means nobody is viewing the notebook. That is not an error to fix; mention the page in your reply instead.
 
@@ -50,6 +50,6 @@ The user often answers open questions and edits plans in the notebook rather tha
 quoll watch
 ```
 
-It prints `changed: <page>` each time a page is saved and runs until stopped. Start it from the story directory with the Monitor tool, which turns each line into a notification. A background shell command would have to exit to report a change, and in qmux every restart shows up as a new job.
+It prints `changed: <page>` each time a page is saved and runs until stopped. Start it with the Monitor tool, which turns each line into a notification. A background shell command would have to exit to report a change, and in qmux every restart shows up as a new job.
 
 Monitor stops a watch after at most 30 minutes; start it again when it does. Your own writes are reported too, so skip pages you have just written. When the user changes a page, read it, act on what they wrote, and fold answers into the page: move a settled question into `decisions.md`, or update the plan.

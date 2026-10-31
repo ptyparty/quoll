@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { findNotebook, listPages, pageFromPath, resolveAsset, resolveTarget } from "./notebook.ts";
+import { findNotebook, isDirectory, listPages, openNotebook, pageFromPath, resolveAsset, resolveTarget } from "./notebook.ts";
 
 let story: string;
 let root: string;
@@ -20,42 +20,53 @@ beforeEach(() => {
 afterEach(() => rmSync(story, { recursive: true, force: true }));
 
 describe("findNotebook", () => {
-  test("finds the notebook folder from the story dir, inside it, or below a repo", () => {
-    expect(findNotebook(story)).toBe(root);
-    expect(findNotebook(join(root, "design"))).toBe(root);
-    expect(findNotebook(join(story, "repo", "src"))).toBe(root);
-  });
-});
-
-describe("findNotebook with a notebook root", () => {
-  test("maps a story dir, or anything below it, to the story's folder in the notebook root", () => {
-    const notes = join(story, "notes");
-    const work = join(story, "work", "stories", "sc-1", "repo", "storybook", "stories", "Button");
-    mkdirSync(work, { recursive: true });
-    expect(findNotebook(work, notes)).toBe(join(notes, "sc-1"));
-    expect(findNotebook(join(story, "work", "stories", "sc-1"), notes)).toBe(join(notes, "sc-1"));
+  test("without a notebook root, uses the start directory as it is", () => {
+    expect(findNotebook(story)).toBe(story);
+    expect(findNotebook(join(story, "repo", "src"), undefined, "sc-1")).toBe(join(story, "repo", "src"));
   });
 
-  test("uses folders inside the notebook root as they are, including the root itself", () => {
+  test("with a notebook root and no focus, uses the whole root", () => {
     const notes = join(story, "notes");
-    expect(findNotebook(notes, notes)).toBe(notes);
-    expect(findNotebook(join(notes, "sc-1"), notes)).toBe(join(notes, "sc-1"));
+    expect(findNotebook(join(story, "work", "stories", "sc-1"), notes)).toBe(notes);
+  });
+
+  test("focuses on a named notebook, or the start directory's name", () => {
+    const notes = join(story, "notes");
+    expect(findNotebook(story, notes, "sc-1")).toBe(join(notes, "sc-1"));
+    expect(findNotebook(join(story, "work", "stories", "sc-52521"), notes, true)).toBe(join(notes, "sc-52521"));
+    expect(findNotebook(join(story, "work", "exfresso", "merlin"), notes, true)).toBe(join(notes, "merlin"));
+  });
+
+  test("refuses names that would leave the notebook root", () => {
+    const notes = join(story, "notes");
+    for (const name of ["", ".", "..", "a/b"]) expect(() => findNotebook(story, notes, name)).toThrow();
+    expect(() => findNotebook("/", notes, true)).toThrow();
   });
 
   test("recognises the root through a symlink", () => {
     const notes = join(story, "notes");
     mkdirSync(notes);
     symlinkSync(notes, join(story, "linked"));
-    expect(findNotebook(notes, join(story, "linked"))).toBe(notes);
-  });
-
-  test("outside any stories directory, falls back to the notebook folder lookup", () => {
-    mkdirSync(join(story, "notes", "repo"), { recursive: true });
-    expect(findNotebook(join(story, "repo", "src"), join(story, "notes"))).toBe(root);
+    expect(findNotebook(story, join(story, "linked"), "sc-1")).toBe(join(notes, "sc-1"));
   });
 
   test("expands ~ in the root", () => {
-    expect(findNotebook(join(homedir(), "notes-quoll-test", "sc-1"), "~/notes-quoll-test")).toBe(join(homedir(), "notes-quoll-test", "sc-1"));
+    expect(findNotebook(story, "~/notes-quoll-test", "sc-1")).toBe(join(homedir(), "notes-quoll-test", "sc-1"));
+  });
+});
+
+describe("openNotebook", () => {
+  test("creates a missing notebook inside the notebook root", () => {
+    const notes = join(story, "notes");
+    expect(openNotebook(join(notes, "sc-1"), notes)).toBe(join(notes, "sc-1"));
+    expect(isDirectory(join(notes, "sc-1"))).toBe(true);
+  });
+
+  test("creates nothing outside the notebook root", () => {
+    expect(openNotebook(story)).toBe(story);
+    expect(() => openNotebook(join(story, "missing"))).toThrow();
+    expect(() => openNotebook(join(story, "missing"), join(story, "notes"))).toThrow();
+    expect(isDirectory(join(story, "missing"))).toBe(false);
   });
 });
 

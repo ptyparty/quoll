@@ -1,38 +1,37 @@
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { isExternal } from "./document.ts";
 
-export const notebookFolder = "notebook";
 export const indexPage = "index.md";
 
 export type Page = { path: string; modified: number };
 
 export type Target = { page: string; anchor?: string };
 
-export function findNotebook(start: string, notebookRoot?: string): string {
-  const from = realOrResolved(start);
-  if (notebookRoot) {
-    const root = realOrResolved(expandHome(notebookRoot));
-    if (contains(root, from)) return from;
-    const story = storyDir(from);
-    if (story) return join(root, basename(story));
-  }
-  let dir = from;
-  while (true) {
-    if (basename(dir) === notebookFolder) return dir;
-    const candidate = join(dir, notebookFolder);
-    if (isDirectory(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) return join(resolve(start), notebookFolder);
-    dir = parent;
-  }
+export type Focus = string | true;
+
+export function findNotebook(start: string, notebookRoot?: string, focus?: Focus): string {
+  if (!notebookRoot) return realOrResolved(start);
+  const root = notebookRootPath(notebookRoot);
+  if (focus === undefined) return root;
+  const name = focus === true ? basename(resolve(start)) : focus;
+  if (!isNotebookName(name)) throw new Error(`Not a notebook name: "${name}"`);
+  return join(root, name);
 }
 
-function storyDir(from: string): string | undefined {
-  const ancestors: string[] = [];
-  for (let dir = from; dirname(dir) !== dir; dir = dirname(dir)) ancestors.push(dir);
-  return ancestors.findLast((dir) => basename(dirname(dir)) === "stories");
+export function notebookRootPath(notebookRoot: string): string {
+  return realOrResolved(expandHome(notebookRoot));
+}
+
+function isNotebookName(name: string): boolean {
+  return name !== "" && name !== "." && name !== ".." && !name.includes("/") && !name.includes(sep);
+}
+
+export function openNotebook(notebook: string, notebookRoot?: string): string {
+  if (notebookRoot && contains(notebookRootPath(notebookRoot), notebook)) mkdirSync(notebook, { recursive: true });
+  else if (!isDirectory(notebook)) throw new Error(`No notebook folder at ${notebook}`);
+  return realpathSync(notebook);
 }
 
 function expandHome(path: string): string {
@@ -129,7 +128,7 @@ export function isFile(path: string): boolean {
   }
 }
 
-function isDirectory(path: string): boolean {
+export function isDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
   } catch {
