@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { MouseButtons, createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -245,5 +245,89 @@ describe("viewer", () => {
     expect(viewer.show("design/plan", root)).toEqual({ ok: true });
     expect(viewer.page).toBe("plan.md");
     expect(viewer.show("index", root)).toEqual({ ignored: true });
+  });
+
+  describe("comments", () => {
+    const page = ["# Plan", "", "intro line", "", "## Rollout", "", "- ship it", "- watch it", "", "last words"].join("\n");
+
+    async function commenting(): Promise<{ setup: TestRendererSetup; viewer: Viewer; sent: string[] }> {
+      writeFileSync(join(root, "index.md"), page);
+      const sent: string[] = [];
+      const opened = await open(false, {
+        comment: async (comment) => {
+          sent.push(`${comment.label}\n${comment.text}`);
+          return `Commenting on ${comment.label}`;
+        },
+      });
+      return { ...opened, sent };
+    }
+
+    test("c puts a hint letter by each block, and pressing one comments on that block", async () => {
+      const { setup, sent } = await commenting();
+      setup.mockInput.pressKey("c");
+      const frame = await settle(setup);
+      expect(frame).toMatch(/^\s*a\s+.*Plan/m);
+      expect(frame).toMatch(/^\s*s\s+intro line/m);
+      expect(frame).toContain("comment on: a letter");
+      setup.mockInput.pressKey("f");
+      await settle(setup);
+      expect(sent).toEqual([`index.md:7–8 · "ship it"\nComment on index.md, lines 7–8 under "Plan › Rollout":\nFile: ${join(root, "index.md")}\n> - ship it\n> - watch it\n`]);
+      expect(await settle(setup)).toContain('Commenting on index.md:7–8 · "ship it"');
+    });
+
+    test("j and k move the selection, Enter comments on it, and Esc leaves without commenting", async () => {
+      const { setup, sent } = await commenting();
+      setup.mockInput.pressKey("c");
+      setup.mockInput.pressEscape();
+      await settle(setup);
+      expect(sent).toEqual([]);
+      expect(await settle(setup)).toContain("c comment");
+      setup.mockInput.pressKey("c");
+      setup.mockInput.pressKey("j");
+      setup.mockInput.pressKey("j");
+      setup.mockInput.pressKey("k");
+      setup.mockInput.pressEnter();
+      await settle(setup);
+      expect(sent.map((comment) => comment.split("\n")[0])).toEqual(['index.md:3 · "intro line"']);
+    });
+
+    test("clicking a block with the left button comments on it, only while picking one", async () => {
+      const { setup, sent } = await commenting();
+      const row = () => setup.captureCharFrame().split("\n").findIndex((line) => line.includes("last words"));
+      await settle(setup);
+      await setup.mockMouse.click(3, row());
+      await settle(setup);
+      expect(sent).toEqual([]);
+      setup.mockInput.pressKey("c");
+      await settle(setup);
+      await setup.mockMouse.click(3, row(), MouseButtons.RIGHT);
+      await settle(setup);
+      expect(sent).toEqual([]);
+      await setup.mockMouse.click(3, row());
+      await settle(setup);
+      expect(sent.map((comment) => comment.split("\n")[0])).toEqual(['index.md:10 · "last words"']);
+    });
+
+    test("scrolling while picking moves the hint letters to the blocks on screen", async () => {
+      writeFileSync(join(root, "index.md"), Array.from({ length: 40 }, (_, index) => `para ${index}`).join("\n\n"));
+      const sent: string[] = [];
+      const { setup } = await open(false, {
+        comment: async (comment) => {
+          sent.push(comment.label);
+          return "ok";
+        },
+      });
+      await settle(setup);
+      setup.mockInput.pressKey("c");
+      await settle(setup);
+      for (let step = 0; step < 10; step++) await setup.mockMouse.scroll(3, 3, "down");
+      const frame = await settle(setup);
+      const top = /^\s*a\s+para (\d+)/m.exec(frame);
+      expect(top).not.toBeNull();
+      expect(Number(top![1])).toBeGreaterThan(0);
+      setup.mockInput.pressKey("a");
+      await settle(setup);
+      expect(sent).toEqual([`index.md:${Number(top![1]) * 2 + 1} · "para ${top![1]}"`]);
+    });
   });
 });

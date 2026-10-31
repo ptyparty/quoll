@@ -54,3 +54,18 @@ It prints `changed: <page>` each time a page is saved and runs until stopped. St
 
 Monitor stops a watch after at most 30 minutes; start it again when it does. Your own writes are reported too, so skip pages you have just written. When the user changes a page, read it, act on what they wrote, and fold answers into the page: move a settled question into `decisions.md`, or update the plan.
 
+## Comments from the user
+
+The user can comment on a block of a page from quoll. The comment reaches you as a message that starts with the context, then their words:
+
+```
+Comment on plan.md, lines 12–14 under "Plan › Rollout":
+File: /path/to/notebook/story/plan.md
+> - [ ] Ship the migration
+> - [ ] Watch the dashboards
+
+Do the dashboards before the migration.
+```
+
+The quoted lines are the page's source when they commented, and the line numbers are 1-based. If the page has changed since, find the spot by the quote. Act on the comment, and update the page where it calls for a change.
+

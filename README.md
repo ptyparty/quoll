@@ -15,8 +15,9 @@ Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll`
 
 Inside qmux, `quoll show`, `quoll path` and `quoll watch` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
 
-Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `o` outline · `i` index · `H`/`L` back and forward · `e` edit in helix · `w` follow · `r` reload · `q` quit.
+Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `o` outline · `i` index · `H`/`L` back and forward · `e` edit in helix · `w` follow · `r` reload · `c` comment · `q` quit.
 
+`c` comments on a block of the page: pick one by its hint letter, by moving with `j`/`k` and pressing Enter, or by clicking it. quoll runs `QUOLL_COMMENT_COMMAND` with a short label for the block as its last argument, joined with `=` when the command ends in an option such as `--label`, and sends the block's file, line numbers, heading path and source on stdin. Inside qmux, `qmux claude compose --from-stdin --label` opens the message box for the tab's Claude with that context attached. Without the variable, quoll copies the context to the clipboard.
 
 Follow mode jumps to whatever page in the notebook changed last, at the changed line. Scrolling, navigating, or `quoll show` turns it off; `w` turns it back on.
 
