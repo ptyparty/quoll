@@ -29,7 +29,23 @@ Standard markdown plus the Obsidian forms quoll reads:
 - `![[mockup.png]]` or `![caption](shots/mockup.png)` on its own line shows an image. Keep images inside the notebook folder.
 - A fenced code block tagged `mermaid` is drawn as a diagram, in any type mermaid supports. One that fails to parse shows its source and mermaid's error instead, and readers in a terminal without images see the source, so keep labels short and the source readable.
 - `%% hidden %%` is left out of the rendered page.
-- Frontmatter is skipped.
+- Frontmatter is not shown on the page, except for its tags.
+
+## Tags
+
+Tags go in a page's frontmatter, as Obsidian writes them:
+
+```markdown
+---
+tags: [design, logo]
+---
+```
+
+quoll shows a page's tags beside its name. Its tag list (`t`) lets the user open every page with a given tag, and its page list matches on tags.
+
+- **Read them first.** Before you search a notebook for pages about something, run `quoll tags`. It prints each tag with the pages that carry it, separated by tabs. `quoll tags logo` prints only the pages tagged `logo` or a tag nested under it, such as `logo/qmux`, and exits 1 when there are none. Read the pages under the tags that fit. Like `quoll path`, it finds the notebook in your qmux tab, or takes `--focus`.
+- **Tag the pages you write.** Give each new page one to three tags about its subject or what kind of page it is, such as `decision`, `mockup` or `plan`. Reuse the notebook's existing tags where one fits rather than coining a near-duplicate, and keep them lowercase (quoll ignores case, as Obsidian does), with hyphens between words and a `/` for nesting (`logo/qmux`).
+- **Keep them current.** When a page's subject changes, update its tags. Leave the tags the user wrote alone unless they ask.
 
 ## Pointing the user at something
 

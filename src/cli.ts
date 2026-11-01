@@ -2,7 +2,8 @@
 import { createCliRenderer } from "@opentui/core";
 import { realpathSync } from "node:fs";
 import { deliverComment } from "./comment.ts";
-import { findNotebook, type Focus, isFile, notebookPath, openNotebook, pageFromPath } from "./notebook.ts";
+import { hasTag } from "./document.ts";
+import { findNotebook, type Focus, isFile, notebookPath, openNotebook, pageFromPath, pagesByTag } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.ts";
 import { listen, send, tabViewerRoot } from "./socket.ts";
@@ -14,6 +15,7 @@ const usage = `Usage:
   quoll show <page>[#heading]         Show a page in every quoll viewing this notebook; inside qmux, only in this tab
   quoll path                          Print the notebook folder
   quoll watch                         Print "changed: <page>" each time a page in the notebook is saved
+  quoll tags [tag]                    List the notebook's frontmatter tags and their pages, or the pages with one tag
   quoll setup [--yes|--remove]        List quoll's Claude Code skill, link it into Claude's config, or remove it
 
 Options:
@@ -29,7 +31,7 @@ creating it when it is missing. A dir given on the command line is used as is.
 Without QUOLL_DIR, the notebook root is the current directory, and --focus
 needs a name.
 
-Inside qmux, show, path, and watch use the notebook the quoll in this tab is
+Inside qmux, show, path, watch, and tags use the notebook the quoll in this tab is
 showing, unless --focus or --dir is given.
 
 Pages are markdown files; links and embeds may use Obsidian syntax.
@@ -108,8 +110,9 @@ async function run(options: Options): Promise<number> {
   if (options.focus === true && options.dir === undefined && !process.env.QUOLL_DIR) {
     throw new Error("--focus without a name needs QUOLL_DIR or --dir; use --focus=<name> to open ./<name>");
   }
-  const command = ["show", "path", "watch"].includes(options.positional[0] ?? "") ? options.positional.shift() : undefined;
+  const command = ["show", "path", "watch", "tags"].includes(options.positional[0] ?? "") ? options.positional.shift() : undefined;
   if (command === "show") return show(options);
+  if (command === "tags") return tags(options);
   if ((command === "path" || command === "watch") && options.positional.length > 0) {
     console.error(usage);
     return 2;
@@ -146,6 +149,26 @@ async function show(options: Options): Promise<number> {
     console.error(failed.error);
     return 1;
   }
+  return 0;
+}
+
+function tags(options: Options): number {
+  if (options.positional.length > 1) {
+    console.error(usage);
+    return 2;
+  }
+  const tagged = pagesByTag(viewedNotebook(options));
+  const wanted = options.positional[0];
+  if (wanted !== undefined) {
+    const pages = [...new Set([...tagged].flatMap(([tag, pages]) => (hasTag([tag], wanted) ? pages : [])))].sort();
+    if (pages.length === 0) {
+      console.error(`No pages are tagged ${wanted.startsWith("#") ? wanted : `#${wanted}`}`);
+      return 1;
+    }
+    for (const page of pages) console.log(page);
+    return 0;
+  }
+  for (const [tag, pages] of tagged) console.log([`#${tag}`, ...pages].join("\t"));
   return 0;
 }
 

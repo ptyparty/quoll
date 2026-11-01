@@ -109,6 +109,57 @@ describe("viewer", () => {
     expect(viewer.page).toBe("index.md");
   });
 
+  test("lists the notebook's tags and opens a page picked from one", async () => {
+    writeFileSync(join(root, "index.md"), "---\ntags: [overview]\n---\n# Index");
+    writeFileSync(join(root, "design", "plan.md"), "---\ntags:\n  - design\n  - rollout\n---\n# Plan\n\nThe body.");
+    writeFileSync(join(root, "design", "logo.md"), "---\ntags: [design]\n---\n# Logo");
+    const { setup, viewer } = await open();
+    expect(setup.captureCharFrame()).toContain("index.md #overview");
+    setup.mockInput.pressKey("t");
+    let frame = await settle(setup);
+    expect(frame).toContain("Tags");
+    expect(frame).toMatch(/#design\s+2 pages/);
+    expect(frame).toMatch(/#rollout\s+1 page/);
+    setup.mockInput.pressEnter();
+    frame = await settle(setup);
+    expect(frame).toContain("Pages tagged #design");
+    expect(frame).toContain("design/plan.md");
+    expect(frame).toContain("design/logo.md");
+    expect(frame).not.toMatch(/│.*index\.md/);
+    for (const char of "plan") setup.mockInput.pressKey(char);
+    await settle(setup);
+    setup.mockInput.pressEnter();
+    frame = await settle(setup);
+    expect(viewer.page).toBe("design/plan.md");
+    expect(frame).toContain("The body.");
+  });
+
+  test("the page list shows each page's tags and matches on them", async () => {
+    writeFileSync(join(root, "index.md"), "# Index");
+    writeFileSync(join(root, "design", "plan.md"), "---\ntags: [rollout]\n---\n# Plan");
+    const { setup } = await open();
+    setup.mockInput.pressKey("p");
+    let frame = await settle(setup);
+    expect(frame).toMatch(/design\/plan\.md\s+\d+s ago\s+#rollout/);
+    for (const char of "#roll") setup.mockInput.pressKey(char);
+    frame = await settle(setup);
+    expect(frame).toContain("design/plan.md");
+    expect(frame).not.toMatch(/│.*index\.md/);
+  });
+
+  test("listing tags before a new page's change arrives still follows it there", async () => {
+    writeFileSync(join(root, "index.md"), "# Index");
+    const { setup, viewer } = await open();
+    writeFileSync(join(root, "design", "plan.md"), "---\ntags: [design]\n---\n# Plan");
+    setup.mockInput.pressKey("t");
+    expect(await settle(setup)).toContain("#design");
+    setup.mockInput.pressEscape();
+    await settle(setup);
+    viewer.fileChanged("design/plan.md");
+    await settle(setup);
+    expect(viewer.page).toBe("design/plan.md");
+  });
+
   test("shows an overview when there is no index page", async () => {
     writeFileSync(join(root, "design", "plan.md"), "# Plan");
     const { setup } = await open();
