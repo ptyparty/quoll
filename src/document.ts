@@ -194,3 +194,48 @@ export function blockAtLine(blocks: Block[], line: number): number {
   });
   return found;
 }
+
+export type BlockChanges = { matched: Map<number, number>; changed: number[]; removed: number[] };
+
+export function diffBlocks(before: Block[], after: Block[]): BlockChanges {
+  const old = before.map(blockKey);
+  const next = after.map(blockKey);
+  const common = Array.from({ length: old.length + 1 }, () => new Array<number>(next.length + 1).fill(0));
+  for (let i = old.length - 1; i >= 0; i--) {
+    for (let j = next.length - 1; j >= 0; j--) {
+      common[i]![j] = old[i] === next[j] ? common[i + 1]![j + 1]! + 1 : Math.max(common[i + 1]![j]!, common[i]![j + 1]!);
+    }
+  }
+  const matched = new Map<number, number>();
+  const changed: number[] = [];
+  const removed: number[] = [];
+  let i = 0;
+  let j = 0;
+  let dropped = false;
+  let added = false;
+  const endGap = () => {
+    if (dropped && !added) removed.push(j);
+    dropped = false;
+    added = false;
+  };
+  while (i < old.length || j < next.length) {
+    if (i < old.length && j < next.length && old[i] === next[j]) {
+      endGap();
+      matched.set(i++, j++);
+    } else if (j < next.length && (i === old.length || common[i]![j + 1]! >= common[i + 1]![j]!)) {
+      changed.push(j++);
+      added = true;
+    } else {
+      i++;
+      dropped = true;
+    }
+  }
+  endGap();
+  return { matched, changed, removed };
+}
+
+function blockKey(block: Block): string {
+  if (block.kind === "markdown") return `markdown\n${block.text}`;
+  if (block.kind === "image") return `image\n${block.target}\n${block.alt}`;
+  return `mermaid\n${block.source}`;
+}

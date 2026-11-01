@@ -129,6 +129,55 @@ describe("viewer", () => {
     expect(frame).not.toContain("intro");
   });
 
+  describe("change bars", () => {
+    const paragraphs = ["# Plan", ...Array.from({ length: 20 }, (_, index) => `para ${index}`)].join("\n\n");
+
+    test("bar changed blocks and mark removals until they are scrolled onto the screen", async () => {
+      writeFileSync(join(root, "design", "plan.md"), paragraphs);
+      const { setup, viewer } = await open();
+      writeFileSync(join(root, "design", "plan.md"), paragraphs.replace("para 1\n", "para 1 edited\n").replace("para 3\n\n", "").replace("para 18", "para 18 edited"));
+      viewer.fileChanged("design/plan.md");
+      let frame = await settle(setup);
+      expect(frame).toMatch(/^▎para 1 edited/m);
+      expect(frame).toMatch(/^──\s*\n para 4/m);
+      setup.mockInput.pressKey("j");
+      frame = await settle(setup);
+      expect(frame).toMatch(/^ para 1 edited/m);
+      expect(frame).not.toContain("──");
+      setup.mockInput.pressKey("G");
+      frame = await settle(setup);
+      expect(frame).toMatch(/^ para 18 edited/m);
+    });
+
+    test("opening a changed page keeps its bars until you scroll", async () => {
+      writeFileSync(join(root, "index.md"), "# Index");
+      writeFileSync(join(root, "design", "plan.md"), paragraphs);
+      const { setup, viewer } = await open(false);
+      writeFileSync(join(root, "design", "plan.md"), paragraphs.replace("para 1\n", "para 1 edited\n"));
+      viewer.fileChanged("design/plan.md");
+      setup.mockInput.pressKey("p");
+      await settle(setup);
+      setup.mockInput.pressEnter();
+      let frame = await settle(setup);
+      expect(viewer.page).toBe("design/plan.md");
+      expect(frame).toMatch(/^▎para 1 edited/m);
+      setup.mockInput.pressKey("j");
+      frame = await settle(setup);
+      expect(frame).toMatch(/^ para 1 edited/m);
+    });
+
+    test("a page that was just created has no bars", async () => {
+      writeFileSync(join(root, "index.md"), "# Index");
+      const { setup, viewer } = await open();
+      writeFileSync(join(root, "design", "plan.md"), paragraphs);
+      viewer.fileChanged("design/plan.md");
+      const frame = await settle(setup);
+      expect(viewer.page).toBe("design/plan.md");
+      expect(frame).toContain("para 1");
+      expect(frame).not.toContain("▎");
+    });
+  });
+
   test("follow mode lands inside a long section near the changed line", async () => {
     writeFileSync(join(root, "design", "plan.md"), longPlan);
     const { setup, viewer } = await open();

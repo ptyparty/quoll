@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { blockAtLine, firstChangedLine, headingKey, parseDocument } from "./document.ts";
+import { blockAtLine, diffBlocks, firstChangedLine, headingKey, parseDocument } from "./document.ts";
 
 describe("parseDocument", () => {
   test("splits markdown into headings, paragraphs, lists and tables, each with its source lines", () => {
@@ -81,6 +81,29 @@ describe("firstChangedLine", () => {
     expect(firstChangedLine("a\nb\nc", "a\nb")).toBe(1);
     expect(firstChangedLine("a", "a")).toBeUndefined();
     expect(firstChangedLine("", "new")).toBe(0);
+  });
+});
+
+describe("diffBlocks", () => {
+  test("matches unchanged blocks and reports new, edited and removed ones", () => {
+    const before = parseDocument("# A\n\none\n\ntwo\n\nthree\n\nfour").blocks;
+    const after = parseDocument("# A\n\none edited\n\nthree\n\nfour\n\nfive").blocks;
+    expect(diffBlocks(before, after)).toEqual({
+      matched: new Map([
+        [0, 0],
+        [3, 2],
+        [4, 3],
+      ]),
+      changed: [1, 4],
+      removed: [],
+    });
+  });
+
+  test("marks a removal at the block that follows it, or past the end", () => {
+    const before = parseDocument("a\n\nb\n\nc").blocks;
+    expect(diffBlocks(before, parseDocument("a\n\nc").blocks).removed).toEqual([1]);
+    expect(diffBlocks(before, parseDocument("a\n\nb").blocks).removed).toEqual([2]);
+    expect(diffBlocks(before, parseDocument("a\n\nB\n\nc").blocks)).toMatchObject({ changed: [1], removed: [] });
   });
 });
 

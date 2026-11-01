@@ -1,7 +1,7 @@
-import { BoxRenderable, MarkdownRenderable, MouseButton, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
+import { BorderChars, BoxRenderable, MarkdownRenderable, MouseButton, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { blockAtLine, firstChangedLine, headingKey, parseDocument, type Block, type Document } from "../document.ts";
+import { blockAtLine, diffBlocks, firstChangedLine, headingKey, parseDocument, type Block, type Document } from "../document.ts";
 import { imageIdColor, placeholderLines, type ImageOutput } from "../render/image.ts";
 import { markdownStyle, sendImage } from "../render/markdown.ts";
 import type { MermaidRenderer } from "../render/mermaid.ts";
@@ -24,6 +24,7 @@ export type ViewerOptions = {
 
 type Picker = { state: PickerState<() => void> };
 type BlockFrame = { frame: BoxRenderable; gutter: TextRenderable };
+type PageMarks = { changed: Set<number>; removed: Set<number> };
 type Commenting = { selected: number; hints: Map<string, number>; top: number | undefined; settleFrames: number };
 type Upload = { key: string; id: number; cols: number; rows: number };
 
@@ -31,6 +32,9 @@ const imageMargin = { cols: 4, rows: 4 };
 const imageFile = /\.(png|jpe?g|gif|webp)$/i;
 const followContext = 2;
 const hintLetters = "asdfghlzxcvbnmertyuiopw";
+const barChars = { ...BorderChars.single, vertical: "▎" };
+const noBarChars = { ...BorderChars.single, vertical: " " };
+const seenDelayFrames = 2;
 
 export class Viewer {
   private readonly scroll: ScrollBoxRenderable;
@@ -40,16 +44,20 @@ export class Viewer {
   private readonly history = new History();
   private readonly known = new Map<string, string>();
   private readonly changed = new Set<string>();
+  private readonly marks = new Map<string, PageMarks>();
   private readonly uploaded = new Map<string, Upload>();
   private readonly deferred = new Set<string>();
   private document: Document = { blocks: [], headings: [], links: [] };
+  private pageViews: Renderable[] = [];
   private blockViews: BoxRenderable[] = [];
+  private gaps: TextRenderable[] = [];
   private gutters: TextRenderable[] = [];
   private commenting: Commenting | undefined;
   private picker: Picker | undefined;
   private following: boolean;
   private pendingScroll: { line: number } | { top: number } | undefined;
   private settleFrames = 0;
+  private seenFrames = 0;
   private shown: string | undefined;
   private lastChange: string | undefined;
   private pendingShow: { target: string; notebook: string } | undefined;
@@ -66,10 +74,12 @@ export class Viewer {
     const frame = new BoxRenderable(renderer, { flexDirection: "column", width: "100%", height: "100%", backgroundColor: theme.background });
     this.scroll = new ScrollBoxRenderable(renderer, {
       flexGrow: 1,
-      paddingLeft: 1,
       paddingRight: 1,
       contentOptions: { flexDirection: "column" },
-      onMouseScroll: () => this.stopFollowing(),
+      onMouseScroll: () => {
+        this.stopFollowing();
+        this.lookedAt();
+      },
     });
     this.status = new TextRenderable(renderer, { height: 1, wrapMode: "none", flexShrink: 0 });
     frame.add(this.scroll);
@@ -126,14 +136,17 @@ export class Viewer {
       if (imageFile.test(path) && this.document.blocks.some((block) => block.kind === "image")) this.reload();
       return;
     }
+    const seenBefore = this.known.has(path);
     const before = this.known.get(path) ?? "";
     const after = this.remember(path);
     if (after === undefined) {
+      this.marks.delete(path);
       if (path === this.page) this.reload();
       return;
     }
     const line = firstChangedLine(before, after);
     if (line === undefined) return;
+    if (seenBefore) this.markChanges(path, before, after);
     this.changed.add(path);
     this.lastChange = path;
     if (this.following) {
@@ -161,6 +174,25 @@ export class Viewer {
       this.known.delete(path);
       return undefined;
     }
+  }
+
+  private markChanges(path: string, before: string, after: string, barNew = true): void {
+    const old = parseDocument(before).blocks;
+    const next = parseDocument(after).blocks;
+    const changes = diffBlocks(old, next);
+    const previous = this.marks.get(path);
+    const marks: PageMarks = barNew ? { changed: new Set(changes.changed), removed: new Set(changes.removed) } : { changed: new Set(), removed: new Set() };
+    for (const index of previous?.changed ?? []) {
+      const moved = changes.matched.get(index);
+      if (moved !== undefined) marks.changed.add(moved);
+    }
+    for (const index of previous?.removed ?? []) {
+      const moved = index === old.length ? next.length : changes.matched.get(index);
+      if (moved !== undefined) marks.removed.add(moved);
+    }
+    if (marks.changed.size === 0 && marks.removed.size === 0) this.marks.delete(path);
+    else this.marks.set(path, marks);
+    if (barNew && path === this.page) this.seenFrames = 0;
   }
 
   private visit(page: string | undefined, anchor?: string): boolean {
@@ -221,7 +253,7 @@ export class Viewer {
   }
 
   private renderBlocks(page: string | undefined): void {
-    for (const view of this.blockViews) {
+    for (const view of this.pageViews) {
       this.scroll.remove(view);
       view.destroyRecursively();
     }
@@ -230,14 +262,51 @@ export class Viewer {
     const frames = this.document.blocks.map((block, index) => this.blockFrame(this.blockView(block, page, files), index));
     this.blockViews = frames.map(({ frame }) => frame);
     this.gutters = frames.map(({ gutter }) => gutter);
-    for (const view of this.blockViews) this.scroll.add(view);
+    this.gaps = Array.from({ length: frames.length + 1 }, () => new TextRenderable(this.renderer, { content: "", height: 0, flexShrink: 0, wrapMode: "none" }));
+    this.pageViews = this.gaps.flatMap((gap, index) => [gap, ...this.blockViews.slice(index, index + 1)]);
+    for (const view of this.pageViews) this.scroll.add(view);
+    this.renderMarks();
+  }
+
+  private renderMarks(): void {
+    const marks = this.page ? this.marks.get(this.page) : undefined;
+    const last = this.blockViews.length;
+    this.blockViews.forEach((view, index) => {
+      view.customBorderChars = marks?.changed.has(index) ? barChars : noBarChars;
+    });
+    this.gaps.forEach((gap, index) => {
+      const removed = marks?.removed.has(index) ?? false;
+      gap.height = removed || (index > 0 && index < last) ? 1 : 0;
+      gap.content = removed ? styled([fg(theme.removed)("──")]) : "";
+    });
+  }
+
+  private lookedAt(): void {
+    this.seenFrames = seenDelayFrames;
+    this.renderer.requestRender();
+  }
+
+  private clearSeenMarks(): void {
+    const page = this.page;
+    const marks = page ? this.marks.get(page) : undefined;
+    if (!page || !marks) return;
+    const last = this.blockViews.length - 1;
+    for (const index of this.visibleBlocks()) {
+      marks.changed.delete(index);
+      marks.removed.delete(index);
+      if (index === last) marks.removed.delete(index + 1);
+    }
+    if (marks.changed.size === 0 && marks.removed.size === 0) this.marks.delete(page);
+    this.renderMarks();
   }
 
   private blockFrame(view: Renderable, index: number): BlockFrame {
     const frame = new BoxRenderable(this.renderer, {
       flexDirection: "row",
-      marginTop: index === 0 ? 0 : 1,
       flexShrink: 0,
+      border: ["left"],
+      customBorderChars: noBarChars,
+      borderColor: theme.changed,
       onMouseDown: (event) => {
         if (event.button === MouseButton.LEFT && this.commenting && !this.picker && !this.editing && this.page) void this.comment(index);
       },
@@ -325,6 +394,10 @@ export class Viewer {
       this.settleFrames--;
       if (this.settleFrames <= 0) this.pendingScroll = undefined;
       this.renderer.requestRender();
+    } else if (this.seenFrames > 0) {
+      this.seenFrames--;
+      if (this.seenFrames === 0) this.clearSeenMarks();
+      this.renderer.requestRender();
     }
     this.settleHints();
     if (this.message && Date.now() > this.message.until) {
@@ -384,6 +457,7 @@ export class Viewer {
     const scrollBy = (delta: number) => {
       this.scroll.scrollBy(delta);
       this.stopFollowing();
+      this.lookedAt();
     };
     if (key.name === "q" || (key.ctrl && key.name === "c")) this.close();
     else if (key.name === "j" || key.name === "down") scrollBy(1);
@@ -487,7 +561,9 @@ export class Viewer {
       this.editing = false;
     }
     this.changed.delete(page);
-    this.remember(page);
+    const before = this.known.get(page);
+    const after = this.remember(page);
+    if (before !== undefined && after !== undefined) this.markChanges(page, before, after, false);
     this.reload();
     const deferred = [...this.deferred];
     this.deferred.clear();
@@ -544,6 +620,7 @@ export class Viewer {
     const bottom = top + (this.blockViews[index]?.height ?? 1);
     if (top < this.scroll.scrollTop) this.scroll.scrollTo(top);
     else if (bottom > this.scroll.scrollTop + this.scroll.height) this.scroll.scrollTo(Math.max(bottom - this.scroll.height, top - this.scroll.height + 1, 0));
+    this.lookedAt();
     this.assignHints();
   }
 
