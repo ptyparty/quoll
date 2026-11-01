@@ -14,6 +14,7 @@ Default to using Bun instead of Node.js.
 - `src/render/`: markdown style and kitty image placeholders, copied from qmux's forms until they move into a shared package, and mermaid diagrams drawn to cached PNGs.
 - `src/watch.ts`: the notebook watcher behind follow mode and `quoll watch`.
 - `skills/quoll/`: the agent skill.
+- `src/setup.ts`: `quoll setup`, which links the skill into Claude Code's config; `src/links.ts` is copied from qmux.
 
 ## Testing
 

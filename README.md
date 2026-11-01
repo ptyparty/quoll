@@ -29,6 +29,8 @@ Follow mode jumps to whatever page in the notebook changed last, at the changed 
 
 Images show through kitty graphics, inside qmux too. ` ```mermaid ` blocks are drawn as images by mermaid's command-line tool, which drives the installed Chrome or Chromium (`QUOLL_CHROME` picks another). Drawings are kept in `$XDG_STATE_HOME/quoll/mermaid`, so a diagram is drawn once and again only when it changes. While one draws, and wherever images can't show, the block shows its source; a diagram that fails to draw shows its source and mermaid's error.
 
+`quoll setup` shows whether quoll's skill for Claude is linked into Claude Code's config (`~/.claude/skills`, or under `CLAUDE_CONFIG_DIR`). The skill tells Claude how to keep a notebook, point you at a page with `quoll show`, and notice your edits with `quoll watch`. `quoll setup --yes` links it, so it follows this checkout as you update it, and `quoll setup --remove` takes the link out again.
+
 ## The README recording
 
 `scripts/hero-cast` regenerates `docs/quoll.gif`. It runs a real Claude Code session, so each take costs model calls and comes out a little different. It builds a demo checkout from `scripts/hero-fixture` in `/tmp/demo-notes`, gives qmux, fish and Claude Code a scratch config there, and runs qmux and quoll from the ptyparty checkouts beside this one (`PTYPARTY_DIR` points elsewhere). It drives the session in a pty and draws each frame with Pillow. It needs `python3`, `fish` and a monospace TTF; pyte and Pillow install into a scratch venv on the first run.
