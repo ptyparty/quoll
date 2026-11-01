@@ -4,6 +4,10 @@
 
 A terminal viewer for a story's design notebook: a folder of markdown pages and images, readable in Obsidian too.
 
+![native Claude writing a plan that quoll follows, then revising a table after a comment from quoll](docs/quoll.gif)
+
+*Native Claude in qmux on the left, quoll on the right. Claude writes a plan with a backoff table, and quoll follows each page as it is saved. `c` on the table opens Claude's message box with the table attached, a comment asks for a lower cap, and Claude revises the table in place. Waiting on the model is time-lapsed.*
+
 ```
 quoll [dir] [--focus[=name]] [--no-follow]  view the notebook
 quoll show <page>[#heading]                 make the open viewers show a page
@@ -24,3 +28,7 @@ Follow mode jumps to whatever page in the notebook changed last, at the changed 
 `quoll show` reaches every viewer on the notebook. Inside qmux it reaches only the viewers in the same tab, which find each other through `QMUX_TAB_DIR`.
 
 Images show through kitty graphics, inside qmux too. ` ```mermaid ` blocks are drawn as images by mermaid's command-line tool, which drives the installed Chrome or Chromium (`QUOLL_CHROME` picks another). Drawings are kept in `$XDG_STATE_HOME/quoll/mermaid`, so a diagram is drawn once and again only when it changes. While one draws, and wherever images can't show, the block shows its source; a diagram that fails to draw shows its source and mermaid's error.
+
+## The README recording
+
+`scripts/hero-cast` regenerates `docs/quoll.gif`. It runs a real Claude Code session, so each take costs model calls and comes out a little different. It builds a demo checkout from `scripts/hero-fixture` in `/tmp/demo-notes`, gives qmux, fish and Claude Code a scratch config there, and runs qmux and quoll from the ptyparty checkouts beside this one (`PTYPARTY_DIR` points elsewhere). It drives the session in a pty and draws each frame with Pillow. It needs `python3`, `fish` and a monospace TTF; pyte and Pillow install into a scratch venv on the first run.
