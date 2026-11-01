@@ -9,4 +9,6 @@ export const theme = {
   error: "#e82424",
   selected: "#98bb6c",
   follow: "#d27e99",
+  changed: "#dca561",
+  removed: "#c34043",
 } as const;
