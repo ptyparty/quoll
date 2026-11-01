@@ -1,0 +1,10 @@
+import { expect, test } from "bun:test";
+import { applyCoupon, discountFor } from "./coupons.ts";
+
+test("a fixed coupon never discounts below zero", () => {
+  expect(applyCoupon({ kind: "fixed", code: "FIVE", amount: 500 }, 300)).toBe(0);
+});
+
+test("a percent coupon takes its share of the subtotal", () => {
+  expect(discountFor({ kind: "percent", code: "TEN", percent: 10 }, 2000)).toBe(200);
+});

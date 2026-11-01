@@ -1,0 +1,18 @@
+import type { Cents } from "./money.ts";
+
+export type Coupon =
+  | { kind: "percent"; code: string; percent: number }
+  | { kind: "fixed"; code: string; amount: Cents };
+
+export function discountFor(coupon: Coupon, subtotal: Cents): Cents {
+  switch (coupon.kind) {
+    case "percent":
+      return Math.floor(subtotal * coupon.percent) / 100;
+    case "fixed":
+      return Math.min(coupon.amount, subtotal);
+  }
+}
+
+export function applyCoupon(coupon: Coupon, subtotal: Cents): Cents {
+  return subtotal - discountFor(coupon, subtotal);
+}
