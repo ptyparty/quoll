@@ -109,6 +109,33 @@ function newlines(text: string): number {
   return count;
 }
 
+export function frontmatterTags(source: string): string[] {
+  const lines = source.split(/\r?\n/);
+  const end = skipFrontmatter(lines);
+  if (end === 0) return [];
+  let data: unknown;
+  try {
+    data = Bun.YAML.parse(lines.slice(1, end - 1).join("\n"));
+  } catch {
+    return [];
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const fields = data as Record<string, unknown>;
+  const raw = fields.tags ?? fields.tag;
+  const values = Array.isArray(raw) ? raw : [raw];
+  const tags = values
+    .filter((value) => typeof value === "string" || typeof value === "number")
+    .flatMap((value) => String(value).split(/[,\s]+/))
+    .map((tag) => tag.replace(/^#/, "").toLowerCase())
+    .filter(Boolean);
+  return [...new Set(tags)];
+}
+
+export function hasTag(tags: string[], wanted: string): boolean {
+  const tag = wanted.replace(/^#/, "").toLowerCase();
+  return tags.some((candidate) => candidate === tag || candidate.startsWith(`${tag}/`));
+}
+
 function skipFrontmatter(lines: string[]): number {
   if (lines[0]?.trim() !== "---") return 0;
   const end = lines.findIndex((line, index) => index > 0 && line.trim() === "---");

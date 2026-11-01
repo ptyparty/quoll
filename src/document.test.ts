@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { blockAtLine, diffBlocks, firstChangedLine, headingKey, parseDocument } from "./document.ts";
+import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument } from "./document.ts";
 
 describe("parseDocument", () => {
   test("splits markdown into headings, paragraphs, lists and tables, each with its source lines", () => {
@@ -71,6 +71,31 @@ describe("parseDocument", () => {
       [3, 3],
       [7, 10],
     ]);
+  });
+});
+
+describe("frontmatterTags", () => {
+  test("reads tags written as a list, an inline array, or a string", () => {
+    expect(frontmatterTags("---\ntags:\n  - design\n  - '#qmux'\n---\n# Page")).toEqual(["design", "qmux"]);
+    expect(frontmatterTags("---\ntitle: Plan\ntags: [design, logo/qmux, 2026]\n---")).toEqual(["design", "logo/qmux", "2026"]);
+    expect(frontmatterTags("---\ntag: design, logo design\n---")).toEqual(["design", "logo"]);
+    expect(frontmatterTags("---\ntags: 2026\n---")).toEqual(["2026"]);
+  });
+
+  test("folds case and splits array items on spaces, as Obsidian tags have none", () => {
+    expect(frontmatterTags("---\ntags: [Design, 'logo design', design]\n---")).toEqual(["design", "logo"]);
+  });
+
+  test("a tag matches its own pages and those of tags nested under it", () => {
+    expect(hasTag(["logo/qmux"], "logo")).toBe(true);
+    expect(hasTag(["logo/qmux"], "#Logo/qmux")).toBe(true);
+    expect(hasTag(["logos"], "logo")).toBe(false);
+  });
+
+  test("finds no tags without frontmatter, without a tags field, or in broken YAML", () => {
+    expect(frontmatterTags("# Page\n\ntags: [design]")).toEqual([]);
+    expect(frontmatterTags("---\ntitle: Plan\n---")).toEqual([]);
+    expect(frontmatterTags("---\ntags: [design\n---")).toEqual([]);
   });
 });
 

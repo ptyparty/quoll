@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { findNotebook, isDirectory, listPages, openNotebook, pageFromPath, resolveAsset, resolveTarget } from "./notebook.ts";
+import { findNotebook, isDirectory, listPages, openNotebook, pageFromPath, pagesByTag, resolveAsset, resolveTarget } from "./notebook.ts";
 
 let story: string;
 let root: string;
@@ -97,4 +97,15 @@ test("listPages lists markdown pages and pageFromPath maps files into the notebo
   expect(listPages(root).map((page) => page.path).sort()).toEqual(["design/plan.md", "index.md"]);
   expect(pageFromPath(root, story, "notebook/design/plan.md")).toBe("design/plan.md");
   expect(pageFromPath(root, story, "repo/x.md")).toBeUndefined();
+});
+
+describe("pagesByTag", () => {
+  test("groups pages under each frontmatter tag, sorted by tag and path", () => {
+    writeFileSync(join(root, "index.md"), "---\ntags: [overview, design]\n---\n# Index");
+    writeFileSync(join(root, "design", "plan.md"), "---\ntags:\n  - design\n---\n# Plan");
+    expect([...pagesByTag(root)]).toEqual([
+      ["design", ["design/plan.md", "index.md"]],
+      ["overview", ["index.md"]],
+    ]);
+  });
 });

@@ -1,13 +1,13 @@
 import { BorderChars, BoxRenderable, MarkdownRenderable, MouseButton, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { blockAtLine, diffBlocks, firstChangedLine, headingKey, parseDocument, type Block, type Document } from "../document.ts";
+import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument, type Block, type Document } from "../document.ts";
 import { imageIdColor, placeholderLines, type ImageOutput } from "../render/image.ts";
 import { markdownStyle, sendImage } from "../render/markdown.ts";
 import type { MermaidRenderer } from "../render/mermaid.ts";
 import { styled, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
-import { contains, indexPage, listFiles, listPages, overlaps, resolveAsset, resolveTarget } from "../notebook.ts";
+import { contains, indexPage, listFiles, listPages, overlaps, pagesByTag, readPage, resolveAsset, resolveTarget } from "../notebook.ts";
 import { commentContext, type Comment } from "../comment.ts";
 import type { Reply } from "../socket.ts";
 import { History } from "./history.ts";
@@ -473,6 +473,7 @@ export class Viewer {
     else if (key.name === "f") this.openPicker("Links", this.linkItems());
     else if (key.name === "p") this.openPicker("Pages", this.pageItems());
     else if (key.name === "o") this.openPicker("Outline", this.outlineItems());
+    else if (key.name === "t") this.openPicker("Tags", this.tagItems());
     else if (key.name === "i") this.navigate(existsSync(join(this.options.root, indexPage)) ? indexPage : undefined);
     else if (key.name === "w") this.toggleFollow();
     else if (key.name === "e") void this.edit();
@@ -527,13 +528,35 @@ export class Viewer {
     });
   }
 
-  private pageItems(): PickerItem<() => void>[] {
-    return listPages(this.options.root).map((page) => ({
-      label: page.path,
-      detail: ago(page.modified),
-      mark: this.changed.has(page.path),
-      value: () => this.navigate(page.path),
+  private pageItems(tag?: string): PickerItem<() => void>[] {
+    return listPages(this.options.root).flatMap((page) => {
+      const tags = this.tagsOf(page.path);
+      if (tag !== undefined && !hasTag(tags, tag)) return [];
+      return [
+        {
+          label: page.path,
+          detail: [ago(page.modified), ...tags.map((name) => `#${name}`)].join("  "),
+          mark: this.changed.has(page.path),
+          value: () => this.navigate(page.path),
+        },
+      ];
+    });
+  }
+
+  private tagItems(): PickerItem<() => void>[] {
+    return [...pagesByTag(this.options.root, (page) => this.sourceOf(page))].map(([tag, pages]) => ({
+      label: `#${tag}`,
+      detail: pages.length === 1 ? "1 page" : `${pages.length} pages`,
+      value: () => this.openPicker(`Pages tagged #${tag}`, this.pageItems(tag)),
     }));
+  }
+
+  private tagsOf(page: string): string[] {
+    return frontmatterTags(this.sourceOf(page) ?? "");
+  }
+
+  private sourceOf(page: string): string | undefined {
+    return this.known.get(page) ?? readPage(this.options.root, page);
   }
 
   private outlineItems(): PickerItem<() => void>[] {
@@ -675,10 +698,11 @@ export class Viewer {
 
   private renderStatus(): void {
     const page = this.page ?? "notebook";
+    const tags = this.page ? this.tagsOf(this.page).map((tag) => ` #${tag}`).join("") : "";
     const follow = this.following ? fg(theme.follow)(" ◉ following") : fg(theme.muted)(" ○ not following");
-    const help = this.commenting ? "comment on: a letter, or j/k and Enter · click · Esc cancel" : "c comment · f links · p pages · o outline · e edit · H/L back/fwd · w follow · q quit";
+    const help = this.commenting ? "comment on: a letter, or j/k and Enter · click · Esc cancel" : "c comment · f links · p pages · t tags · o outline · e edit · H/L back/fwd · w follow · q quit";
     const right = this.message ? fg(theme.warning)(this.message.text) : fg(this.commenting ? theme.selected : theme.muted)(help);
-    this.status.content = styled([bold(fg(theme.accent)(` ${page}`)), follow, "   ", right]);
+    this.status.content = styled([bold(fg(theme.accent)(` ${page}`)), fg(theme.muted)(tags), follow, "   ", right]);
   }
 }
 

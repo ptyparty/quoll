@@ -13,15 +13,18 @@ quoll [dir] [--focus[=name]] [--no-follow]  view the notebook
 quoll show <page>[#heading]                 make the open viewers show a page
 quoll path                                  print the notebook folder
 quoll watch                                 print "changed: <page>" each time a page is saved
+quoll tags [tag]                            list the frontmatter tags and their pages, or the pages with one tag
 ```
 
 Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll` browses them all; `quoll --focus=sc-123` opens `$QUOLL_DIR/sc-123`, creating it when it's missing; and a bare `--focus` names the notebook after the current directory, so from `~/work/stories/sc-123` it opens `$QUOLL_DIR/sc-123`. `--dir` overrides `QUOLL_DIR` for one run. Without it, the notebook root is the current directory, and `--focus` needs a name. A folder named on the command line is opened as it is.
 
-Inside qmux, `quoll show`, `quoll path` and `quoll watch` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
+Inside qmux, `quoll show`, `quoll path`, `quoll watch` and `quoll tags` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
 
-Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `o` outline · `i` index · `H`/`L` back and forward · `e` edit in helix · `w` follow · `r` reload · `c` comment · `q` quit.
+Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `t` tags · `o` outline · `i` index · `H`/`L` back and forward · `e` edit in helix · `w` follow · `r` reload · `c` comment · `q` quit.
 
 `c` comments on a block of the page: pick one by its hint letter, by moving with `j`/`k` and pressing Enter, or by clicking it. quoll runs `QUOLL_COMMENT_COMMAND` with a short label for the block as its last argument, joined with `=` when the command ends in an option such as `--label`, and sends the block's file, line numbers, heading path and source on stdin. Inside qmux, `qmux claude compose --from-stdin --label` opens the message box for the tab's Claude with that context attached. Without the variable, quoll copies the context to the clipboard.
+
+Pages can carry tags in their frontmatter, as Obsidian writes them: `tags: [design, logo]`. A page's tags show beside its name, `t` lists every tag and opens a page picked from one, and the page list matches on tags.
 
 Follow mode jumps to whatever page in the notebook changed last, at the changed line. Scrolling, navigating, or `quoll show` turns it off; `w` turns it back on.
 
