@@ -14,6 +14,7 @@ const usage = `Usage:
   quoll show <page>[#heading]         Show a page in every quoll viewing this notebook; inside qmux, only in this tab
   quoll path                          Print the notebook folder
   quoll watch                         Print "changed: <page>" each time a page in the notebook is saved
+  quoll setup [--yes|--remove]        List quoll's Claude Code skill, link it into Claude's config, or remove it
 
 Options:
   --focus          Open the notebook $QUOLL_DIR/<name>, where <name> is the
@@ -81,6 +82,14 @@ async function main(args: string[]): Promise<number> {
   if (args[0] === "help" || args.includes("--help") || args.includes("-h")) {
     console.log(usage);
     return 0;
+  }
+  if (args[0] === "setup") {
+    try {
+      return (await import("./setup.ts")).setupCommand(args.slice(1));
+    } catch (error) {
+      console.error(`quoll: ${(error as Error).message}`);
+      return 1;
+    }
   }
   const options = parseOptions(args);
   if (!options) {
