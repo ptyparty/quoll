@@ -27,8 +27,8 @@ function isNotebookName(name: string): boolean {
   return name !== "" && name !== "." && name !== ".." && !name.includes("/") && !name.includes(sep);
 }
 
-export function openNotebook(notebook: string, notebookRoot: string): string {
-  if (contains(notebookPath(notebookRoot), realOrResolved(notebook))) mkdirSync(notebook, { recursive: true });
+export function openNotebook(notebook: string, notebookRoots: string[]): string {
+  if (notebookRoots.some((root) => contains(notebookPath(root), realOrResolved(notebook)))) mkdirSync(notebook, { recursive: true });
   else if (!isDirectory(notebook)) throw new Error(`No notebook folder at ${notebook}`);
   return realpathSync(notebook);
 }

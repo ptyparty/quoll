@@ -1,12 +1,15 @@
 #!/usr/bin/env bun
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer, type CliRenderer } from "@opentui/core";
 import { realpathSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { deliverComment } from "./comment.ts";
 import { hasTag } from "./document.ts";
 import { findNotebook, type Focus, isFile, notebookPath, openNotebook, pageFromPath, pagesByTag } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.ts";
+import { notebookRoots, RootChoices, rootChoicesFile } from "./roots.ts";
 import { listen, send, tabViewerRoot } from "./socket.ts";
+import { pickRoot } from "./viewer/root-picker.ts";
 import { Viewer } from "./viewer/viewer.ts";
 import { watchNotebook } from "./watch.ts";
 
@@ -23,10 +26,15 @@ Options:
                    current directory's name (or dir's, when given)
   --focus=<name>   Open the notebook $QUOLL_DIR/<name>
   --dir <folder>   The notebook root for this run, overriding QUOLL_DIR
+  --pick           Ask again which of QUOLL_DIR's roots to use here
 
 QUOLL_DIR is the notebook root, which holds a folder per notebook. quoll opens
 the whole root, so it browses every notebook, and --focus opens one of them,
 creating it when it is missing. A dir given on the command line is used as is.
+
+QUOLL_DIR may list several roots separated by colons. The viewer then asks which
+one to use the first time it opens from a directory, and remembers the answer
+for that directory; show, path, watch, and tags use the remembered root.
 
 Without QUOLL_DIR, the notebook root is the current directory, and --focus
 needs a name.
@@ -43,13 +51,14 @@ block's file, lines, and source on stdin. Inside komux, set it to
 "komux claude compose --from-stdin --label".
 Without it, quoll copies that context to the clipboard.`;
 
-type Options = { dir?: string; focus?: Focus; follow: boolean; positional: string[] };
+type Options = { dir?: string; focus?: Focus; follow: boolean; pick: boolean; positional: string[] };
 
 function parseOptions(args: string[]): Options | undefined {
-  const options: Options = { follow: true, positional: [] };
+  const options: Options = { follow: true, pick: false, positional: [] };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     if (arg === "--no-follow") options.follow = false;
+    else if (arg === "--pick") options.pick = true;
     else if (arg.startsWith("--focus=")) options.focus = arg.slice("--focus=".length);
     else if (arg === "--focus") options.focus = true;
     else if (arg === "--dir") {
@@ -62,8 +71,25 @@ function parseOptions(args: string[]): Options | undefined {
   return options;
 }
 
-function notebookRoot(options: Options): string {
-  return options.dir ?? process.env.QUOLL_DIR ?? process.cwd();
+const rootChoices = new RootChoices(rootChoicesFile());
+
+function configuredRoots(options: Options): string[] {
+  if (options.dir !== undefined) return [options.dir];
+  const roots = notebookRoots(process.env.QUOLL_DIR);
+  return roots.length > 0 ? roots : [process.cwd()];
+}
+
+function knownRoot(options: Options, start: string, pick = false): string | undefined {
+  const roots = configuredRoots(options);
+  if (roots.length === 1) return roots[0];
+  return pick ? undefined : rootChoices.chosen(start, roots);
+}
+
+function notebookRoot(options: Options, start: string): string {
+  const root = knownRoot(options, start);
+  if (root !== undefined) return root;
+  const command = options.focus === undefined ? "quoll" : options.focus === true ? "quoll --focus" : `quoll --focus=${options.focus}`;
+  throw new Error(`QUOLL_DIR lists several notebook roots and none is picked for ${start}; run ${command} there to pick one:\n${configuredRoots(options).join("\n")}`);
 }
 
 function viewedNotebook(options: Options): string {
@@ -71,13 +97,50 @@ function viewedNotebook(options: Options): string {
     const viewed = tabViewerRoot();
     if (viewed) return viewed;
   }
-  return findNotebook(process.cwd(), notebookRoot(options), options.focus);
+  return findNotebook(process.cwd(), notebookRoot(options, process.cwd()), options.focus);
 }
 
-function notebookToView(options: Options): string {
+async function viewNotebook(options: Options): Promise<number> {
   const dir = options.positional[0];
-  if (dir !== undefined && options.focus === undefined) return notebookPath(dir);
-  return findNotebook(dir ?? process.cwd(), notebookRoot(options), options.focus);
+  const roots = configuredRoots(options);
+  if (dir !== undefined && options.focus === undefined) {
+    const notebook = openNotebook(notebookPath(dir), roots);
+    return withRenderer((renderer) => view(renderer, notebook, options.follow));
+  }
+  const start = dir ?? process.cwd();
+  const known = knownRoot(options, start, options.pick);
+  if (known !== undefined) {
+    const notebook = openNotebook(findNotebook(start, known, options.focus), roots);
+    return withRenderer((renderer) => view(renderer, notebook, options.follow));
+  }
+  return withRenderer(async (renderer) => {
+    const picked = await pickUntilSignal(renderer, `Notebook root for ${basename(resolve(start))}`, roots);
+    if (picked === undefined) return 0;
+    rootChoices.choose(start, picked);
+    return view(renderer, openNotebook(findNotebook(start, picked, options.focus), roots), options.follow);
+  });
+}
+
+async function pickUntilSignal(renderer: CliRenderer, title: string, roots: string[]): Promise<string | undefined> {
+  const cancel = new AbortController();
+  const signals = ["SIGHUP", "SIGTERM", "SIGINT"] as const;
+  const onSignal = () => cancel.abort();
+  for (const signal of signals) process.on(signal, onSignal);
+  try {
+    return await pickRoot(renderer, title, roots, cancel.signal);
+  } finally {
+    for (const signal of signals) process.off(signal, onSignal);
+  }
+}
+
+async function withRenderer(use: (renderer: CliRenderer) => Promise<number>): Promise<number> {
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, exitSignals: [], useMouse: true });
+  try {
+    return await use(renderer);
+  } finally {
+    renderer.destroy();
+    await renderer.closed;
+  }
 }
 
 async function main(args: string[]): Promise<number> {
@@ -107,7 +170,7 @@ async function main(args: string[]): Promise<number> {
 }
 
 async function run(options: Options): Promise<number> {
-  if (options.focus === true && options.dir === undefined && !process.env.QUOLL_DIR) {
+  if (options.focus === true && options.dir === undefined && notebookRoots(process.env.QUOLL_DIR).length === 0) {
     throw new Error("--focus without a name needs QUOLL_DIR or --dir; use --focus=<name> to open ./<name>");
   }
   const command = ["show", "path", "watch", "tags"].includes(options.positional[0] ?? "") ? options.positional.shift() : undefined;
@@ -121,12 +184,12 @@ async function run(options: Options): Promise<number> {
     console.log(viewedNotebook(options));
     return 0;
   }
-  if (command === "watch") return watchPages(openNotebook(viewedNotebook(options), notebookRoot(options)));
+  if (command === "watch") return watchPages(openNotebook(viewedNotebook(options), configuredRoots(options)));
   if (options.positional.length > 1) {
     console.error(usage);
     return 2;
   }
-  return view(openNotebook(notebookToView(options), notebookRoot(options)), options.follow);
+  return viewNotebook(options);
 }
 
 async function show(options: Options): Promise<number> {
@@ -183,8 +246,7 @@ async function watchPages(root: string): Promise<number> {
   return 0;
 }
 
-async function view(root: string, follow: boolean): Promise<number> {
-  const renderer = await createCliRenderer({ exitOnCtrlC: false, exitSignals: [], useMouse: true });
+async function view(renderer: CliRenderer, root: string, follow: boolean): Promise<number> {
   const viewer = new Viewer(renderer, {
     root,
     follow,
@@ -219,8 +281,6 @@ async function view(root: string, follow: boolean): Promise<number> {
     for (const signal of signals) process.off(signal, onSignal);
     stopWatching();
     stopListening();
-    renderer.destroy();
-    await renderer.closed;
   }
   return 0;
 }

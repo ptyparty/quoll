@@ -53,7 +53,7 @@ describe("findNotebook", () => {
 describe("openNotebook", () => {
   test("creates a missing notebook inside the notebook root", () => {
     const notes = join(story, "notes");
-    expect(openNotebook(join(notes, "sc-1"), notes)).toBe(join(notes, "sc-1"));
+    expect(openNotebook(join(notes, "sc-1"), [notes])).toBe(join(notes, "sc-1"));
     expect(isDirectory(join(notes, "sc-1"))).toBe(true);
   });
 
@@ -61,12 +61,12 @@ describe("openNotebook", () => {
     const notes = join(story, "notes");
     mkdirSync(notes);
     symlinkSync(notes, join(story, "linked"));
-    expect(openNotebook(join(story, "linked", "sc-1"), notes)).toBe(join(notes, "sc-1"));
+    expect(openNotebook(join(story, "linked", "sc-1"), [notes])).toBe(join(notes, "sc-1"));
   });
 
   test("creates nothing outside the notebook root", () => {
-    expect(openNotebook(story, join(story, "notes"))).toBe(story);
-    expect(() => openNotebook(join(story, "missing"), join(story, "notes"))).toThrow();
+    expect(openNotebook(story, [join(story, "notes")])).toBe(story);
+    expect(() => openNotebook(join(story, "missing"), [join(story, "notes")])).toThrow();
     expect(isDirectory(join(story, "missing"))).toBe(false);
   });
 });

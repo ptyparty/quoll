@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { stateDir } from "../state.ts";
 
 export type Diagram = { png: string } | { error: string } | { pending: true };
 
@@ -39,7 +39,7 @@ export class MermaidRenderer {
 }
 
 export function mermaidCacheDir(env: Record<string, string | undefined> = process.env): string {
-  return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "quoll", "mermaid");
+  return join(stateDir(env), "mermaid");
 }
 
 export function findChrome(env: Record<string, string | undefined> = process.env): string | undefined {
