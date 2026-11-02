@@ -9,7 +9,7 @@ A terminal viewer for a story's design notebook: a folder of markdown pages and 
 *Native Claude in komux on the left, quoll on the right. Claude writes a plan with a backoff table, and quoll follows each page as it is saved. `c` on the table opens Claude's message box with the table attached, a comment asks for a lower cap, and Claude revises the table in place. Waiting on the model is time-lapsed.*
 
 ```
-quoll [dir] [--focus[=name]] [--no-follow]  view the notebook
+quoll [dir] [--focus[=name]] [--pick] [--no-follow]  view the notebook
 quoll show <page>[#heading]                 make the open viewers show a page
 quoll path                                  print the notebook folder
 quoll watch                                 print "changed: <page>" each time a page is saved
@@ -17,6 +17,8 @@ quoll tags [tag]                            list the frontmatter tags and their 
 ```
 
 Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll` browses them all; `quoll --focus=sc-123` opens `$QUOLL_DIR/sc-123`, creating it when it's missing; and a bare `--focus` names the notebook after the current directory, so from `~/work/stories/sc-123` it opens `$QUOLL_DIR/sc-123`. `--dir` overrides `QUOLL_DIR` for one run. Without it, the notebook root is the current directory, and `--focus` needs a name. A folder named on the command line is opened as it is.
+
+`QUOLL_DIR` can list several roots separated by colons, such as one for work notes and one for personal ones. The first time the viewer opens from a directory, it asks which root to use and remembers the answer for that directory in `$XDG_STATE_HOME/quoll/roots.json`; `--pick` asks again. `quoll path`, `show`, `watch` and `tags` use the remembered root, and fail with the list of roots when there isn't one yet.
 
 Inside komux, `quoll show`, `quoll path`, `quoll watch` and `quoll tags` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
 

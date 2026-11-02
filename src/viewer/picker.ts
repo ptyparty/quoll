@@ -84,6 +84,10 @@ export class PickerView {
     renderer.root.add(this.box);
   }
 
+  destroy(): void {
+    this.box.destroyRecursively();
+  }
+
   render<T>(state: PickerState<T> | undefined): void {
     this.box.visible = state !== undefined;
     if (!state) {
