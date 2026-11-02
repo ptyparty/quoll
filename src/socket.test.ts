@@ -27,25 +27,25 @@ function viewer(name: string, env: Record<string, string>): string[] {
   return shown;
 }
 
-test("inside qmux, show reaches only the viewers in the same tab", async () => {
+test("inside komux, show reaches only the viewers in the same tab", async () => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), "quoll-socket-")));
   const runtime = { XDG_RUNTIME_DIR: join(dir, "runtime") };
-  const tabA = { ...runtime, QMUX_TAB_DIR: join(dir, "tab-a") };
-  const tabB = { ...runtime, QMUX_TAB_DIR: join(dir, "tab-b") };
+  const tabA = { ...runtime, KOMUX_TAB_DIR: join(dir, "tab-a") };
+  const tabB = { ...runtime, KOMUX_TAB_DIR: join(dir, "tab-b") };
   const inA = viewer("a", tabA);
   const inB = viewer("b", tabB);
   const outside = viewer("outside", runtime);
 
   expect(await send({ show: "plan", root: "/notebook" }, tabA)).toEqual([{ ok: true }]);
   expect(await send({ show: "index", root: "/notebook" }, runtime)).toEqual([{ ok: true }]);
-  expect(await send({ show: "decisions", root: "/notebook" }, { ...runtime, QMUX_TAB_DIR: join(dir, "tab-c") })).toEqual([]);
+  expect(await send({ show: "decisions", root: "/notebook" }, { ...runtime, KOMUX_TAB_DIR: join(dir, "tab-c") })).toEqual([]);
   expect([...inA, ...inB, ...outside]).toEqual(["a: plan", "outside: index"]);
 });
 
 test("tabViewerRoot names the notebook a running viewer in this tab shows", async () => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), "quoll-socket-")));
   const runtime = { XDG_RUNTIME_DIR: join(dir, "runtime") };
-  const tab = { ...runtime, QMUX_TAB_DIR: join(dir, "tab") };
+  const tab = { ...runtime, KOMUX_TAB_DIR: join(dir, "tab") };
   expect(tabViewerRoot(tab)).toBeUndefined();
   viewer("outside", runtime);
   expect(tabViewerRoot(runtime)).toBeUndefined();

@@ -9,7 +9,7 @@ The user reads the notebook in quoll, a terminal viewer that usually sits beside
 
 ## Where it lives
 
-Run `quoll path`; it prints the notebook folder, which is usually outside the story directory (a folder under the user's notebook root). Inside qmux it prints the notebook the quoll in your tab is showing, so it works from anywhere in the tab, including inside one of the story's repos. Outside qmux, or with no quoll open in the tab, run `quoll path`, `quoll show` and `quoll watch` from the story directory with `--focus`, which names the notebook after the current directory; without it they use the whole notebook root. Create the folder if it is missing. Keep `index.md` as the entry page: a short summary of the work and links to every other page, since quoll opens it first.
+Run `quoll path`; it prints the notebook folder, which is usually outside the story directory (a folder under the user's notebook root). Inside komux it prints the notebook the quoll in your tab is showing, so it works from anywhere in the tab, including inside one of the story's repos. Outside komux, or with no quoll open in the tab, run `quoll path`, `quoll show` and `quoll watch` from the story directory with `--focus`, which names the notebook after the current directory; without it they use the whole notebook root. Create the folder if it is missing. Keep `index.md` as the entry page: a short summary of the work and links to every other page, since quoll opens it first.
 
 ## What goes in
 
@@ -43,8 +43,8 @@ tags: [design, logo]
 
 quoll shows a page's tags beside its name. Its tag list (`t`) lets the user open every page with a given tag, and its page list matches on tags.
 
-- **Read them first.** Before you search a notebook for pages about something, run `quoll tags`. It prints each tag with the pages that carry it, separated by tabs. `quoll tags logo` prints only the pages tagged `logo` or a tag nested under it, such as `logo/qmux`, and exits 1 when there are none. Read the pages under the tags that fit. Like `quoll path`, it finds the notebook in your qmux tab, or takes `--focus`.
-- **Tag the pages you write.** Give each new page one to three tags about its subject or what kind of page it is, such as `decision`, `mockup` or `plan`. Reuse the notebook's existing tags where one fits rather than coining a near-duplicate, and keep them lowercase (quoll ignores case, as Obsidian does), with hyphens between words and a `/` for nesting (`logo/qmux`).
+- **Read them first.** Before you search a notebook for pages about something, run `quoll tags`. It prints each tag with the pages that carry it, separated by tabs. `quoll tags logo` prints only the pages tagged `logo` or a tag nested under it, such as `logo/komux`, and exits 1 when there are none. Read the pages under the tags that fit. Like `quoll path`, it finds the notebook in your komux tab, or takes `--focus`.
+- **Tag the pages you write.** Give each new page one to three tags about its subject or what kind of page it is, such as `decision`, `mockup` or `plan`. Reuse the notebook's existing tags where one fits rather than coining a near-duplicate, and keep them lowercase (quoll ignores case, as Obsidian does), with hyphens between words and a `/` for nesting (`logo/komux`).
 - **Keep them current.** When a page's subject changes, update its tags. Leave the tags the user wrote alone unless they ask.
 
 ## Pointing the user at something
@@ -66,9 +66,9 @@ The user often answers open questions and edits plans in the notebook rather tha
 quoll watch
 ```
 
-It prints `changed: <page>` each time a page is saved and runs until stopped. Start it with the Monitor tool, which turns each line into a notification. A background shell command would have to exit to report a change, and in qmux every restart shows up as a new job.
+It prints `changed: <page>` each time a page is saved and runs until stopped. Start it with the Monitor tool, which turns each line into a notification. A background shell command would have to exit to report a change, and in komux every restart shows up as a new job.
 
-Monitor stops a watch after at most 30 minutes; start it again when it does. Your own writes are reported too, so skip pages you have just written. When one of those wakes you after your turn has ended and brings nothing else, end the turn at once; inside qmux, with a `**QMUX: NO TOAST**` line, so the user is not toasted about your own edit. When the user changes a page, read it, act on what they wrote, and fold answers into the page: move a settled question into `decisions.md`, or update the plan.
+Monitor stops a watch after at most 30 minutes; start it again when it does. Your own writes are reported too, so skip pages you have just written. When one of those wakes you after your turn has ended and brings nothing else, end the turn at once; inside komux, with a `**KOMUX: NO TOAST**` line, so the user is not toasted about your own edit. When the user changes a page, read it, act on what they wrote, and fold answers into the page: move a settled question into `decisions.md`, or update the plan.
 
 ## Comments from the user
 

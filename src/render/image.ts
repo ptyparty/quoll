@@ -15,7 +15,7 @@ const maxRawWidth = 2048;
 export type ImageOutput = { enabled: boolean; write: (commands: string[]) => void };
 
 export function terminalImageOutput(kittyGraphics: boolean, env: Record<string, string | undefined> = process.env): ImageOutput {
-  const enabled = env.QMUX_SOCKET ? env.QMUX_KITTY_GRAPHICS === "1" : kittyGraphics;
+  const enabled = env.KOMUX_SOCKET ? env.KOMUX_KITTY_GRAPHICS === "1" : kittyGraphics;
   return { enabled, write: writeToTerminal };
 }
 

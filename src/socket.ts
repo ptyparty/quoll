@@ -9,7 +9,7 @@ export type Reply = { ok: true } | { error: string } | { ignored: true };
 type Env = Record<string, string | undefined>;
 
 function socketDir(env: Env): string {
-  return join(env.QMUX_TAB_DIR || env.XDG_RUNTIME_DIR || tmpdir(), "quoll");
+  return join(env.KOMUX_TAB_DIR || env.XDG_RUNTIME_DIR || tmpdir(), "quoll");
 }
 
 export function listen(root: string, handle: (request: Request) => Reply, env: Env = process.env): () => void {
@@ -58,7 +58,7 @@ export async function send(request: Request, env: Env = process.env): Promise<Re
 }
 
 export function tabViewerRoot(env: Env = process.env): string | undefined {
-  if (!env.QMUX_TAB_DIR) return undefined;
+  if (!env.KOMUX_TAB_DIR) return undefined;
   return viewers(socketDir(env)).sort((a, b) => b.started - a.started)[0]?.root;
 }
 

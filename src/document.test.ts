@@ -76,8 +76,8 @@ describe("parseDocument", () => {
 
 describe("frontmatterTags", () => {
   test("reads tags written as a list, an inline array, or a string", () => {
-    expect(frontmatterTags("---\ntags:\n  - design\n  - '#qmux'\n---\n# Page")).toEqual(["design", "qmux"]);
-    expect(frontmatterTags("---\ntitle: Plan\ntags: [design, logo/qmux, 2026]\n---")).toEqual(["design", "logo/qmux", "2026"]);
+    expect(frontmatterTags("---\ntags:\n  - design\n  - '#komux'\n---\n# Page")).toEqual(["design", "komux"]);
+    expect(frontmatterTags("---\ntitle: Plan\ntags: [design, logo/komux, 2026]\n---")).toEqual(["design", "logo/komux", "2026"]);
     expect(frontmatterTags("---\ntag: design, logo design\n---")).toEqual(["design", "logo"]);
     expect(frontmatterTags("---\ntags: 2026\n---")).toEqual(["2026"]);
   });
@@ -87,8 +87,8 @@ describe("frontmatterTags", () => {
   });
 
   test("a tag matches its own pages and those of tags nested under it", () => {
-    expect(hasTag(["logo/qmux"], "logo")).toBe(true);
-    expect(hasTag(["logo/qmux"], "#Logo/qmux")).toBe(true);
+    expect(hasTag(["logo/komux"], "logo")).toBe(true);
+    expect(hasTag(["logo/komux"], "#Logo/komux")).toBe(true);
     expect(hasTag(["logos"], "logo")).toBe(false);
   });
 

@@ -16,19 +16,19 @@ PROMPT = (
 )
 COMMENT = 'cap the delay at 1 hour, not longer'
 
-QMUX_CONFIG = '''export default {
+KOMUX_CONFIG = '''export default {
   defaultCwd: %(project)s,
   env: {
     QUOLL_DIR: %(notebooks)s,
-    QUOLL_COMMENT_COMMAND: "qmux claude compose --from-stdin --label",
+    QUOLL_COMMENT_COMMAND: "komux claude compose --from-stdin --label",
   },
-  untrackedCommands: ["claude", "remax", "hx", "qmux", "quoll"],
+  untrackedCommands: ["claude", "remax", "hx", "komux", "quoll"],
   tabs: { "checkout-service": { cwd: %(project)s, layout: "notes" } },
   startup: ["checkout-service"],
   layouts: {
     notes: {
       row: [
-        { command: ["qmux", "claude", "--mode", "auto"], name: "claude", focus: true },
+        { command: ["komux", "claude", "--mode", "auto"], name: "claude", focus: true },
         { command: ["quoll", "--focus=my-work"], name: "quoll" },
       ],
     },
@@ -47,7 +47,7 @@ def prepare(repo):
     )
     notebooks = os.path.join(ROOT, 'notebooks')
     os.makedirs(notebooks)
-    hs.write_qmux_config(env, QMUX_CONFIG, project=project, notebooks=notebooks)
+    hs.write_komux_config(env, KOMUX_CONFIG, project=project, notebooks=notebooks)
     hs.claude_config(sandbox, project, [os.path.join(repo, 'skills', 'quoll')], env, trim_watch=True)
     return project, env
 
@@ -93,7 +93,7 @@ def main():
     out_base = sys.argv[1]
     repo = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
     project, env = prepare(repo)
-    hs.record(['qmux', 'attach', SESSION], COLS, ROWS, project, env, SESSION, tour, out_base)
+    hs.record(['komux', 'attach', SESSION], COLS, ROWS, project, env, SESSION, tour, out_base)
 
 
 if __name__ == '__main__':
