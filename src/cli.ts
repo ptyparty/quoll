@@ -12,7 +12,7 @@ import { watchNotebook } from "./watch.ts";
 
 const usage = `Usage:
   quoll [dir] [--no-follow]           View the notebook (default: $QUOLL_DIR, or the current directory)
-  quoll show <page>[#heading]         Show a page in every quoll viewing this notebook; inside qmux, only in this tab
+  quoll show <page>[#heading]         Show a page in every quoll viewing this notebook; inside komux, only in this tab
   quoll path                          Print the notebook folder
   quoll watch                         Print "changed: <page>" each time a page in the notebook is saved
   quoll tags [tag]                    List the notebook's frontmatter tags and their pages, or the pages with one tag
@@ -31,7 +31,7 @@ creating it when it is missing. A dir given on the command line is used as is.
 Without QUOLL_DIR, the notebook root is the current directory, and --focus
 needs a name.
 
-Inside qmux, show, path, watch, and tags use the notebook the quoll in this tab is
+Inside komux, show, path, watch, and tags use the notebook the quoll in this tab is
 showing, unless --focus or --dir is given.
 
 Pages are markdown files; links and embeds may use Obsidian syntax.
@@ -39,8 +39,8 @@ Pages are markdown files; links and embeds may use Obsidian syntax.
 In the viewer, c comments on a block, picked by letter, j/k and Enter, or a click:
 quoll runs QUOLL_COMMENT_COMMAND with a label for the block as its last argument
 (joined with = when the command ends in an option such as --label) and the
-block's file, lines, and source on stdin. Inside qmux, set it to
-"qmux claude compose --from-stdin --label".
+block's file, lines, and source on stdin. Inside komux, set it to
+"komux claude compose --from-stdin --label".
 Without it, quoll copies that context to the clipboard.`;
 
 type Options = { dir?: string; focus?: Focus; follow: boolean; positional: string[] };
@@ -141,7 +141,7 @@ async function show(options: Options): Promise<number> {
   const request = asFile ? `${asFile}${anchor ? `#${anchor}` : ""}` : target;
   const replies = (await send({ show: request, root })).filter((reply) => !("ignored" in reply));
   if (replies.length === 0) {
-    console.error(`No quoll is open${process.env.QMUX_TAB_DIR ? " in this qmux tab" : ""} on ${root}`);
+    console.error(`No quoll is open${process.env.KOMUX_TAB_DIR ? " in this komux tab" : ""} on ${root}`);
     return 1;
   }
   const failed = replies.find((reply) => "error" in reply);

@@ -46,7 +46,7 @@ describe("commentContext", () => {
 
 describe("withLabel", () => {
   test("joins the label to a trailing option so a leading dash stays a value", () => {
-    expect(withLabel(["qmux", "compose", "--label"], "-scratch.md:3")).toEqual(["qmux", "compose", "--label=-scratch.md:3"]);
+    expect(withLabel(["komux", "compose", "--label"], "-scratch.md:3")).toEqual(["komux", "compose", "--label=-scratch.md:3"]);
     expect(withLabel(["notify", "--to=me"], "p.md:1")).toEqual(["notify", "--to=me", "p.md:1"]);
     expect(withLabel(["notify"], "p.md:1")).toEqual(["notify", "p.md:1"]);
   });
@@ -54,7 +54,7 @@ describe("withLabel", () => {
 
 describe("commandWords", () => {
   test("splits on spaces and honours quotes and backslashes", () => {
-    expect(commandWords("qmux claude compose --from-stdin --label")).toEqual(["qmux", "claude", "compose", "--from-stdin", "--label"]);
+    expect(commandWords("komux claude compose --from-stdin --label")).toEqual(["komux", "claude", "compose", "--from-stdin", "--label"]);
     expect(commandWords(`say 'two words' "a \\"quoted\\" one" back\\ slash ''`)).toEqual(["say", "two words", 'a "quoted" one', "back slash", ""]);
     expect(commandWords("   ")).toEqual([]);
   });
