@@ -23,9 +23,9 @@ Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll`
 
 Inside komux, `quoll show`, `quoll path`, `quoll watch` and `quoll tags` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
 
-Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `t` tags · `o` outline · `i` index · `H`/`L` back and forward · `e` edit in helix · `w` follow · `r` reload · `c` comment · `q` quit.
+Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `t` tags · `o` outline · `i` index · `H`/`L` back and forward · `e` edit in helix · `w` follow · `r` reload · `q` quit.
 
-`c` comments on a block of the page: pick one by its hint letter, by moving with `j`/`k` and pressing Enter, or by clicking it. quoll runs `QUOLL_COMMENT_COMMAND` with a short label for the block as its last argument, joined with `=` when the command ends in an option such as `--label`, and sends the block's file, line numbers, heading path and source on stdin. Inside komux, `komux claude compose --from-stdin --label` opens the message box for the tab's Claude with that context attached. Without the variable, quoll copies the context to the clipboard.
+Inside komux, **Alt+shift+c** on quoll attaches a block of the page to a message for the tab's Claude: pick one by its hint letter, by moving with `j`/`k` and pressing Enter, or by clicking it, and komux's message box opens with the block's file, line numbers, heading path and source attached. quoll listens for komux on a socket in the tab's folder while it runs.
 
 Pages can carry tags in their frontmatter, as Obsidian writes them: `tags: [design, logo]`. A page's tags show beside its name, `t` lists every tag and opens a page picked from one, and the page list matches on tags.
 

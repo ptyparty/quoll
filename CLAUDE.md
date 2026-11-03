@@ -11,6 +11,7 @@ Default to using Bun instead of Node.js.
 - `src/notebook.ts`: finds the notebook folder, lists pages, and resolves link and image targets.
 - `src/viewer/`: the OpenTUI viewer, its history, and the picker.
 - `src/socket.ts`: the unix socket `quoll show` uses to reach running viewers.
+- `src/context.ts`: the socket komux asks for context on Alt shift c (shared with kowari); `src/comment.ts` builds the context for a block.
 - `src/render/`: markdown style and kitty image placeholders, copied from komux's forms until they move into a shared package, and mermaid diagrams drawn to cached PNGs.
 - `src/watch.ts`: the notebook watcher behind follow mode and `quoll watch`.
 - `guide/`: the agent's guide, one markdown page per topic, printed by `quoll guide <page>` (`src/guide.ts`, shared with kowari) and starting at `index.md`.
