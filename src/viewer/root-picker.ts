@@ -1,12 +1,13 @@
 import type { CliRenderer, KeyEvent } from "@opentui/core";
 import { homedir } from "node:os";
+import { tildePath } from "../roots.ts";
 import { PickerState, PickerView, pickerKey } from "./picker.ts";
 
 export function pickRoot(renderer: CliRenderer, title: string, roots: string[], cancel: AbortSignal): Promise<string | undefined> {
   const home = homedir();
   const state = new PickerState(
     title,
-    roots.map((root) => ({ label: root === home || root.startsWith(`${home}/`) ? `~${root.slice(home.length)}` : root, value: root })),
+    roots.map((root) => ({ label: tildePath(root, home), value: root })),
   );
   const view = new PickerView(renderer);
   view.render(state);

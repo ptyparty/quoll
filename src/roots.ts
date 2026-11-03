@@ -7,6 +7,10 @@ export function notebookRoots(value: string | undefined): string[] {
   return (value ?? "").split(":").filter((root) => root !== "");
 }
 
+export function tildePath(path: string, home: string): string {
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
+
 export function rootChoicesFile(env: Record<string, string | undefined> = process.env): string {
   return join(stateDir(env), "roots.json");
 }

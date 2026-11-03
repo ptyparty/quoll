@@ -1,8 +1,9 @@
 import { homedir } from "node:os";
+import { tildePath } from "./roots.ts";
 
 export type AskedRoot = { status: "picked"; root: string } | { status: "cancelled" };
 
-export function rootForm(title: string, roots: string[], home = homedir()) {
+export function rootForm(title: string, roots: string[], preselected: string, home = homedir()) {
   return {
     title,
     elements: [
@@ -11,7 +12,7 @@ export function rootForm(title: string, roots: string[], home = homedir()) {
         id: "root",
         label: "Which notebook root should quoll use here?",
         options: roots.map((root) => ({ value: root, label: tildePath(root, home) })),
-        default: roots[0],
+        default: preselected,
         required: true,
         other: false,
       },
@@ -34,20 +35,18 @@ export function askedRoot(output: string, roots: string[]): AskedRoot | undefine
   }
 }
 
-export async function askRootWithKomux(title: string, roots: string[]): Promise<AskedRoot | undefined> {
+export async function askRootWithKomux(title: string, roots: string[], preselected: string, cancel: AbortSignal): Promise<AskedRoot | undefined> {
   try {
     const child = Bun.spawn(["komux", "ask", "-", "--wait", "--host", "komux"], {
-      stdin: new Blob([JSON.stringify(rootForm(title, roots))]),
+      stdin: new Blob([JSON.stringify(rootForm(title, roots, preselected))]),
       stdout: "pipe",
       stderr: "ignore",
+      signal: cancel,
     });
     const [output, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    if (cancel.aborted) return { status: "cancelled" };
     return code === 0 ? askedRoot(output, roots) : undefined;
   } catch {
     return undefined;
   }
-}
-
-function tildePath(path: string, home: string): string {
-  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
