@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { deliverComment } from "./comment.ts";
 import { hasTag } from "./document.ts";
+import { askRootWithKomux } from "./komux-ask.ts";
 import { findNotebook, type Focus, isFile, notebookPath, openNotebook, pageFromPath, pagesByTag } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.ts";
@@ -33,8 +34,9 @@ the whole root, so it browses every notebook, and --focus opens one of them,
 creating it when it is missing. A dir given on the command line is used as is.
 
 QUOLL_DIR may list several roots separated by colons. The viewer then asks which
-one to use the first time it opens from a directory, and remembers the answer
-for that directory; show, path, watch, and tags use the remembered root.
+one to use the first time it opens from a directory, in a komux form when run
+inside komux, and remembers the answer for that directory; show, path, watch,
+and tags use the remembered root.
 
 Without QUOLL_DIR, the notebook root is the current directory, and --focus
 needs a name.
@@ -113,8 +115,16 @@ async function viewNotebook(options: Options): Promise<number> {
     const notebook = openNotebook(findNotebook(start, known, options.focus), roots);
     return withRenderer((renderer) => view(renderer, notebook, options.follow));
   }
+  const title = `Notebook root for ${basename(resolve(start))}`;
+  const asked = process.env.KOMUX_SOCKET ? await askRootWithKomux(title, roots) : undefined;
+  if (asked?.status === "cancelled") return 0;
+  if (asked?.status === "picked") {
+    rootChoices.choose(start, asked.root);
+    const notebook = openNotebook(findNotebook(start, asked.root, options.focus), roots);
+    return withRenderer((renderer) => view(renderer, notebook, options.follow));
+  }
   return withRenderer(async (renderer) => {
-    const picked = await pickUntilSignal(renderer, `Notebook root for ${basename(resolve(start))}`, roots);
+    const picked = await pickUntilSignal(renderer, title, roots);
     if (picked === undefined) return 0;
     rootChoices.choose(start, picked);
     return view(renderer, openNotebook(findNotebook(start, picked, options.focus), roots), options.follow);

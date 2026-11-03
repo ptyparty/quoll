@@ -18,7 +18,7 @@ quoll tags [tag]                            list the frontmatter tags and their 
 
 Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll` browses them all; `quoll --focus=sc-123` opens `$QUOLL_DIR/sc-123`, creating it when it's missing; and a bare `--focus` names the notebook after the current directory, so from `~/work/stories/sc-123` it opens `$QUOLL_DIR/sc-123`. `--dir` overrides `QUOLL_DIR` for one run. Without it, the notebook root is the current directory, and `--focus` needs a name. A folder named on the command line is opened as it is.
 
-`QUOLL_DIR` can list several roots separated by colons, such as one for work notes and one for personal ones. The first time the viewer opens from a directory, it asks which root to use and remembers the answer for that directory in `$XDG_STATE_HOME/quoll/roots.json`; `--pick` asks again. `quoll path`, `show`, `watch` and `tags` use the remembered root, and fail with the list of roots when there isn't one yet.
+`QUOLL_DIR` can list several roots separated by colons, such as one for work notes and one for personal ones. The first time the viewer opens from a directory, it asks which root to use, in a komux form when it runs inside komux, and remembers the answer for that directory in `$XDG_STATE_HOME/quoll/roots.json`; `--pick` asks again. `quoll path`, `show`, `watch` and `tags` use the remembered root, and fail with the list of roots when there isn't one yet.
 
 Inside komux, `quoll show`, `quoll path`, `quoll watch` and `quoll tags` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
 
