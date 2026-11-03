@@ -116,28 +116,24 @@ async function viewNotebook(options: Options): Promise<number> {
     return withRenderer((renderer) => view(renderer, notebook, options.follow));
   }
   const title = `Notebook root for ${basename(resolve(start))}`;
-  const asked = process.env.KOMUX_SOCKET ? await askRootWithKomux(title, roots) : undefined;
+  const preselected = rootChoices.chosen(start, roots) ?? roots[0]!;
+  const asked = process.env.KOMUX_SOCKET ? await untilSignal((cancel) => askRootWithKomux(title, roots, preselected, cancel)) : undefined;
   if (asked?.status === "cancelled") return 0;
-  if (asked?.status === "picked") {
-    rootChoices.choose(start, asked.root);
-    const notebook = openNotebook(findNotebook(start, asked.root, options.focus), roots);
-    return withRenderer((renderer) => view(renderer, notebook, options.follow));
-  }
   return withRenderer(async (renderer) => {
-    const picked = await pickUntilSignal(renderer, title, roots);
+    const picked = asked?.status === "picked" ? asked.root : await untilSignal((cancel) => pickRoot(renderer, title, roots, cancel));
     if (picked === undefined) return 0;
     rootChoices.choose(start, picked);
     return view(renderer, openNotebook(findNotebook(start, picked, options.focus), roots), options.follow);
   });
 }
 
-async function pickUntilSignal(renderer: CliRenderer, title: string, roots: string[]): Promise<string | undefined> {
+async function untilSignal<T>(use: (cancel: AbortSignal) => Promise<T>): Promise<T> {
   const cancel = new AbortController();
   const signals = ["SIGHUP", "SIGTERM", "SIGINT"] as const;
   const onSignal = () => cancel.abort();
   for (const signal of signals) process.on(signal, onSignal);
   try {
-    return await pickRoot(renderer, title, roots, cancel.signal);
+    return await use(cancel.signal);
   } finally {
     for (const signal of signals) process.off(signal, onSignal);
   }

@@ -5,7 +5,7 @@ const roots = ["/home/me/work/stories", "/home/me/notes"];
 
 describe("rootForm", () => {
   test("offers only the configured roots, shortening the home directory", () => {
-    const [choice] = rootForm("Notebook root for remax", roots, "/home/me").elements;
+    const [choice] = rootForm("Notebook root for remax", roots, "/home/me/work/stories", "/home/me").elements;
     expect(choice).toMatchObject({
       type: "choice",
       other: false,
@@ -15,6 +15,11 @@ describe("rootForm", () => {
         { value: "/home/me/notes", label: "~/notes" },
       ],
     });
+  });
+
+  test("preselects the given root", () => {
+    const [choice] = rootForm("Notebook root for remax", roots, "/home/me/notes", "/home/me").elements;
+    expect(choice).toMatchObject({ default: "/home/me/notes" });
   });
 });
 
