@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { deliverComment } from "./comment.ts";
 import { hasTag } from "./document.ts";
+import { guideCommand } from "./guide.ts";
 import { askRootWithKomux } from "./komux-ask.ts";
 import { findNotebook, type Focus, isFile, notebookPath, openNotebook, pageFromPath, pagesByTag } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
@@ -20,6 +21,7 @@ const usage = `Usage:
   quoll path                          Print the notebook folder
   quoll watch                         Print "changed: <page>" each time a page in the notebook is saved
   quoll tags [tag]                    List the notebook's frontmatter tags and their pages, or the pages with one tag
+  quoll guide [page]                  Print a page of the guide for agents keeping a notebook; index (the default) links to the rest
   quoll setup [--yes|--remove]        List quoll's Claude Code skill, link it into Claude's config, or remove it
 
 Options:
@@ -154,6 +156,7 @@ async function main(args: string[]): Promise<number> {
     console.log(usage);
     return 0;
   }
+  if (args[0] === "guide") return guideCommand("quoll", args.slice(1));
   if (args[0] === "setup") {
     try {
       return (await import("./setup.ts")).setupCommand(args.slice(1));

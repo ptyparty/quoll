@@ -13,7 +13,8 @@ Default to using Bun instead of Node.js.
 - `src/socket.ts`: the unix socket `quoll show` uses to reach running viewers.
 - `src/render/`: markdown style and kitty image placeholders, copied from komux's forms until they move into a shared package, and mermaid diagrams drawn to cached PNGs.
 - `src/watch.ts`: the notebook watcher behind follow mode and `quoll watch`.
-- `skills/quoll/`: the agent skill.
+- `guide/`: the agent's guide, one markdown page per topic, printed by `quoll guide <page>` (`src/guide.ts`, shared with kowari) and starting at `index.md`.
+- `skills/quoll/`: the agent skill, which only points at `quoll guide index`.
 - `src/setup.ts`: `quoll setup`, which links the skill into Claude Code's config; `src/links.ts` is copied from komux.
 
 ## Testing
