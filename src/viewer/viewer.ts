@@ -8,7 +8,8 @@ import type { MermaidRenderer } from "../render/mermaid.ts";
 import { styled, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
 import { contains, indexPage, listFiles, listPages, overlaps, pagesByTag, readPage, resolveAsset, resolveTarget } from "../notebook.ts";
-import { commentContext, type Comment } from "../comment.ts";
+import { commentContext } from "../comment.ts";
+import type { ContextRequest } from "../context.ts";
 import type { Reply } from "../socket.ts";
 import { History } from "./history.ts";
 import { PickerState, PickerView, pickerKey, type PickerItem } from "./picker.ts";
@@ -19,7 +20,6 @@ export type ViewerOptions = {
   edit: (file: string, line: number) => Promise<void>;
   follow: boolean;
   mermaid?: MermaidRenderer;
-  comment?: (comment: Comment) => Promise<string>;
 };
 
 type Picker = { state: PickerState<() => void> };
@@ -53,6 +53,7 @@ export class Viewer {
   private gaps: TextRenderable[] = [];
   private gutters: TextRenderable[] = [];
   private commenting: Commenting | undefined;
+  private asking: ContextRequest | undefined;
   private picker: Picker | undefined;
   private following: boolean;
   private pendingScroll: { line: number } | { top: number } | undefined;
@@ -259,6 +260,8 @@ export class Viewer {
     }
     const files = this.lazyFiles();
     this.commenting = undefined;
+    this.asking?.cancel();
+    this.asking = undefined;
     const frames = this.document.blocks.map((block, index) => this.blockFrame(this.blockView(block, page, files), index));
     this.blockViews = frames.map(({ frame }) => frame);
     this.gutters = frames.map(({ gutter }) => gutter);
@@ -308,7 +311,7 @@ export class Viewer {
       customBorderChars: noBarChars,
       borderColor: theme.changed,
       onMouseDown: (event) => {
-        if (event.button === MouseButton.LEFT && this.commenting && !this.picker && !this.editing && this.page) void this.comment(index);
+        if (event.button === MouseButton.LEFT && this.commenting && !this.picker && !this.editing && this.page) this.comment(index);
       },
     });
     const gutter = new TextRenderable(this.renderer, { content: "", width: 0, flexShrink: 0, wrapMode: "none" });
@@ -478,7 +481,6 @@ export class Viewer {
     else if (key.name === "w") this.toggleFollow();
     else if (key.name === "e") void this.edit();
     else if (key.name === "r") this.reload();
-    else if (key.name === "c") this.startCommenting();
     else return;
     this.renderer.requestRender();
   };
@@ -597,8 +599,22 @@ export class Viewer {
     this.renderer.requestRender();
   }
 
+  askForContext(request: ContextRequest): void {
+    this.asking?.cancel();
+    if (!this.page || this.blockViews.length === 0) return request.none("No page open in quoll");
+    this.asking = request;
+    request.onCancel(() => {
+      if (this.asking !== request) return;
+      this.asking = undefined;
+      this.stopCommenting();
+      this.renderer.requestRender();
+    });
+    this.startCommenting();
+    request.picking("Pick a block in quoll · Esc cancels");
+    this.renderer.requestRender();
+  }
+
   private startCommenting(): void {
-    if (!this.page || this.blockViews.length === 0) return;
     this.stopFollowing();
     this.commenting = { selected: this.visibleBlocks()[0] ?? 0, hints: new Map(), top: undefined, settleFrames: 3 };
     this.renderHints();
@@ -630,11 +646,11 @@ export class Viewer {
   private commentKey(key: KeyEvent): void {
     const commenting = this.commenting!;
     const last = this.blockViews.length - 1;
-    if (key.name === "escape" || key.name === "q" || (key.ctrl && key.name === "c")) this.stopCommenting();
+    if (key.name === "escape" || key.name === "q" || (key.ctrl && key.name === "c")) this.cancelCommenting();
     else if (key.name === "j" || key.name === "down") this.selectBlock(Math.min(commenting.selected + 1, last));
     else if (key.name === "k" || key.name === "up") this.selectBlock(Math.max(commenting.selected - 1, 0));
-    else if (key.name === "return") void this.comment(commenting.selected);
-    else if (key.name && !key.ctrl && commenting.hints.has(key.name)) void this.comment(commenting.hints.get(key.name)!);
+    else if (key.name === "return") this.comment(commenting.selected);
+    else if (key.name && !key.ctrl && commenting.hints.has(key.name)) this.comment(commenting.hints.get(key.name)!);
   }
 
   private selectBlock(index: number): void {
@@ -645,6 +661,13 @@ export class Viewer {
     else if (bottom > this.scroll.scrollTop + this.scroll.height) this.scroll.scrollTo(Math.max(bottom - this.scroll.height, top - this.scroll.height + 1, 0));
     this.lookedAt();
     this.assignHints();
+  }
+
+  private cancelCommenting(): void {
+    const asking = this.asking;
+    this.asking = undefined;
+    asking?.cancel();
+    this.stopCommenting();
   }
 
   private stopCommenting(): void {
@@ -677,17 +700,18 @@ export class Viewer {
     return (this.blockViews[index]?.y ?? 0) - this.scroll.content.y;
   }
 
-  private async comment(index: number): Promise<void> {
+  private comment(index: number): void {
     const page = this.page;
     const block = this.document.blocks[index];
+    const asking = this.asking;
+    this.asking = undefined;
     this.stopCommenting();
-    if (!page || !block) return;
-    const send = this.options.comment;
-    if (!send) return;
+    if (!page || !block || !asking) return asking?.cancel();
     const asset = block.kind === "image" ? resolveAsset(this.options.root, page, block.target, this.lazyFiles()) : undefined;
     const source = this.known.get(page) ?? "";
     const comment = commentContext({ page, file: join(this.options.root, page), source, block, headings: this.document.headings, ...(asset ? { asset } : {}) });
-    this.flash(await send(comment).catch((error: Error) => `Could not comment: ${error.message}`));
+    asking.attach([comment]);
+    this.flash(`Attached ${comment.label}`);
     this.renderer.requestRender();
   }
 
@@ -700,7 +724,7 @@ export class Viewer {
     const page = this.page ?? "notebook";
     const tags = this.page ? this.tagsOf(this.page).map((tag) => ` #${tag}`).join("") : "";
     const follow = this.following ? fg(theme.follow)(" ◉ following") : fg(theme.muted)(" ○ not following");
-    const help = this.commenting ? "comment on: a letter, or j/k and Enter · click · Esc cancel" : "c comment · f links · p pages · t tags · o outline · e edit · H/L back/fwd · w follow · q quit";
+    const help = this.commenting ? "attach: a letter, or j/k and Enter · click · Esc cancel" : "f links · p pages · t tags · o outline · e edit · H/L back/fwd · w follow · q quit";
     const right = this.message ? fg(theme.warning)(this.message.text) : fg(this.commenting ? theme.selected : theme.muted)(help);
     this.status.content = styled([bold(fg(theme.accent)(` ${page}`)), fg(theme.muted)(tags), follow, "   ", right]);
   }

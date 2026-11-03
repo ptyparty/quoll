@@ -2,7 +2,7 @@
 import { createCliRenderer, type CliRenderer } from "@opentui/core";
 import { realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { deliverComment } from "./comment.ts";
+import { listenForContext } from "./context.ts";
 import { hasTag } from "./document.ts";
 import { guideCommand } from "./guide.ts";
 import { askRootWithKomux } from "./komux-ask.ts";
@@ -48,12 +48,9 @@ showing, unless --focus or --dir is given.
 
 Pages are markdown files; links and embeds may use Obsidian syntax.
 
-In the viewer, c comments on a block, picked by letter, j/k and Enter, or a click:
-quoll runs QUOLL_COMMENT_COMMAND with a label for the block as its last argument
-(joined with = when the command ends in an option such as --label) and the
-block's file, lines, and source on stdin. Inside komux, set it to
-"komux claude compose --from-stdin --label".
-Without it, quoll copies that context to the clipboard.`;
+Inside komux, Alt shift c on the viewer picks a block, by letter, j/k and Enter,
+or a click, and opens the message box for the tab's Claude with the block's file,
+lines, and source attached.`;
 
 type Options = { dir?: string; focus?: Focus; follow: boolean; pick: boolean; positional: string[] };
 
@@ -261,7 +258,6 @@ async function view(renderer: CliRenderer, root: string, follow: boolean): Promi
     follow,
     mermaid: new MermaidRenderer(mermaidCacheDir(), findChrome()),
     images: () => terminalImageOutput(renderer.capabilities?.kitty_graphics ?? false),
-    comment: (comment) => deliverComment(comment, { copy: (text) => renderer.copyToClipboardOSC52(text), env: process.env }),
     edit: async (file, line) => {
       await renderer.suspend();
       try {
@@ -280,6 +276,7 @@ async function view(renderer: CliRenderer, root: string, follow: boolean): Promi
     renderer.requestRender();
     return reply;
   });
+  const stopContext = listenForContext((request) => viewer.askForContext(request));
   const signals = ["SIGHUP", "SIGTERM", "SIGINT"] as const;
   const onSignal = () => viewer.close();
   for (const signal of signals) process.on(signal, onSignal);
@@ -290,6 +287,7 @@ async function view(renderer: CliRenderer, root: string, follow: boolean): Promi
     for (const signal of signals) process.off(signal, onSignal);
     stopWatching();
     stopListening();
+    stopContext();
   }
   return 0;
 }

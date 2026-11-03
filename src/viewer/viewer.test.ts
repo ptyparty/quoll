@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { MermaidRenderer } from "../render/mermaid.ts";
 import { tinyPng } from "../render/test-images.ts";
 import { Viewer, type ViewerOptions } from "./viewer.ts";
+import { ContextRequest } from "../context.ts";
 
 let setup: TestRendererSetup | undefined;
 let root: string;
@@ -347,78 +348,90 @@ describe("viewer", () => {
     expect(viewer.show("index", root)).toEqual({ ignored: true });
   });
 
-  describe("comments", () => {
+  describe("context for komux", () => {
     const page = ["# Plan", "", "intro line", "", "## Rollout", "", "- ship it", "- watch it", "", "last words"].join("\n");
 
-    async function commenting(): Promise<{ setup: TestRendererSetup; viewer: Viewer; sent: string[] }> {
-      writeFileSync(join(root, "index.md"), page);
-      const sent: string[] = [];
-      const opened = await open(false, {
-        comment: async (comment) => {
-          sent.push(`${comment.label}\n${comment.text}`);
-          return `Commenting on ${comment.label}`;
-        },
-      });
-      return { ...opened, sent };
+    function request(): { request: ContextRequest; replies: unknown[] } {
+      const replies: unknown[] = [];
+      return { request: new ContextRequest((reply) => replies.push(reply)), replies };
     }
 
-    test("c puts a hint letter by each block, and pressing one comments on that block", async () => {
-      const { setup, sent } = await commenting();
-      setup.mockInput.pressKey("c");
+    async function asked(text = page): Promise<{ setup: TestRendererSetup; viewer: Viewer; replies: unknown[]; request: ContextRequest }> {
+      writeFileSync(join(root, "index.md"), text);
+      const opened = await open(false);
+      await settle(opened.setup);
+      const { request: asking, replies } = request();
+      opened.viewer.askForContext(asking);
+      return { ...opened, replies, request: asking };
+    }
+
+    const labels = (replies: unknown[]) => replies.flatMap((reply) => ((reply as { attach?: { label: string }[] }).attach ?? []).map((attachment) => attachment.label));
+
+    test("puts a hint letter by each block, and pressing one attaches that block", async () => {
+      const { setup, replies } = await asked();
       const frame = await settle(setup);
       expect(frame).toMatch(/^\s*a\s+.*Plan/m);
       expect(frame).toMatch(/^\s*s\s+intro line/m);
-      expect(frame).toContain("comment on: a letter");
+      expect(frame).toContain("attach: a letter");
       setup.mockInput.pressKey("f");
       await settle(setup);
-      expect(sent).toEqual([`index.md:7–8 · "ship it"\nComment on index.md, lines 7–8 under "Plan › Rollout":\nFile: ${join(root, "index.md")}\n> - ship it\n> - watch it\n`]);
-      expect(await settle(setup)).toContain('Commenting on index.md:7–8 · "ship it"');
+      expect(replies).toEqual([
+        { picking: "Pick a block in quoll · Esc cancels" },
+        { attach: [{ label: 'index.md:7–8 · "ship it"', text: `Comment on index.md, lines 7–8 under "Plan › Rollout":\nFile: ${join(root, "index.md")}\n> - ship it\n> - watch it\n` }] },
+      ]);
+      expect(await settle(setup)).toContain('Attached index.md:7–8 · "ship it"');
     });
 
-    test("j and k move the selection, Enter comments on it, and Esc leaves without commenting", async () => {
-      const { setup, sent } = await commenting();
-      setup.mockInput.pressKey("c");
+    test("j and k move the selection, Enter attaches it, and Esc cancels", async () => {
+      const { setup, viewer, replies } = await asked();
       setup.mockInput.pressEscape();
       await settle(setup);
-      expect(sent).toEqual([]);
-      expect(await settle(setup)).toContain("c comment");
-      setup.mockInput.pressKey("c");
+      expect(replies).toEqual([{ picking: "Pick a block in quoll · Esc cancels" }, { cancelled: true }]);
+      expect(await settle(setup)).toContain("f links");
+      const again = request();
+      viewer.askForContext(again.request);
       setup.mockInput.pressKey("j");
       setup.mockInput.pressKey("j");
       setup.mockInput.pressKey("k");
       setup.mockInput.pressEnter();
       await settle(setup);
-      expect(sent.map((comment) => comment.split("\n")[0])).toEqual(['index.md:3 · "intro line"']);
+      expect(labels(again.replies)).toEqual(['index.md:3 · "intro line"']);
     });
 
-    test("clicking a block with the left button comments on it, only while picking one", async () => {
-      const { setup, sent } = await commenting();
+    test("komux cancelling leaves pick mode", async () => {
+      const { setup, request: asking } = await asked();
+      expect(await settle(setup)).toContain("attach: a letter");
+      asking.end();
+      expect(await settle(setup)).toContain("f links");
+    });
+
+    test("c no longer starts picking on its own", async () => {
+      writeFileSync(join(root, "index.md"), page);
+      const { setup } = await open(false);
+      setup.mockInput.pressKey("c");
+      expect(await settle(setup)).not.toContain("attach: a letter");
+    });
+
+    test("clicking a block with the left button attaches it, only while picking one", async () => {
+      writeFileSync(join(root, "index.md"), page);
+      const { setup, viewer } = await open(false);
       const row = () => setup.captureCharFrame().split("\n").findIndex((line) => line.includes("last words"));
       await settle(setup);
       await setup.mockMouse.click(3, row());
       await settle(setup);
-      expect(sent).toEqual([]);
-      setup.mockInput.pressKey("c");
+      const { request: asking, replies } = request();
+      viewer.askForContext(asking);
       await settle(setup);
       await setup.mockMouse.click(3, row(), MouseButtons.RIGHT);
       await settle(setup);
-      expect(sent).toEqual([]);
+      expect(labels(replies)).toEqual([]);
       await setup.mockMouse.click(3, row());
       await settle(setup);
-      expect(sent.map((comment) => comment.split("\n")[0])).toEqual(['index.md:10 · "last words"']);
+      expect(labels(replies)).toEqual(['index.md:10 · "last words"']);
     });
 
     test("scrolling while picking moves the hint letters to the blocks on screen", async () => {
-      writeFileSync(join(root, "index.md"), Array.from({ length: 40 }, (_, index) => `para ${index}`).join("\n\n"));
-      const sent: string[] = [];
-      const { setup } = await open(false, {
-        comment: async (comment) => {
-          sent.push(comment.label);
-          return "ok";
-        },
-      });
-      await settle(setup);
-      setup.mockInput.pressKey("c");
+      const { setup, replies } = await asked(Array.from({ length: 40 }, (_, index) => `para ${index}`).join("\n\n"));
       await settle(setup);
       for (let step = 0; step < 10; step++) await setup.mockMouse.scroll(3, 3, "down");
       const frame = await settle(setup);
@@ -427,7 +440,15 @@ describe("viewer", () => {
       expect(Number(top![1])).toBeGreaterThan(0);
       setup.mockInput.pressKey("a");
       await settle(setup);
-      expect(sent).toEqual([`index.md:${Number(top![1]) * 2 + 1} · "para ${top![1]}"`]);
+      expect(labels(replies)).toEqual([`index.md:${Number(top![1]) * 2 + 1} · "para ${top![1]}"`]);
+    });
+
+    test("says there is nothing to attach with no page open", async () => {
+      const { setup, viewer } = await open(false);
+      await settle(setup);
+      const { request: asking, replies } = request();
+      viewer.askForContext(asking);
+      expect(replies).toEqual([{ none: "No page open in quoll" }]);
     });
   });
 });
