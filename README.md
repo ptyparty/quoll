@@ -14,6 +14,7 @@ quoll show <page>[#heading]                 make the open viewers show a page
 quoll path                                  print the notebook folder
 quoll watch                                 print "changed: <page>" each time a page is saved
 quoll tags [tag]                            list the frontmatter tags and their pages, or the pages with one tag
+quoll guide [page]                          a page of the guide for agents; index links to the rest
 ```
 
 Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll` browses them all; `quoll --focus=sc-123` opens `$QUOLL_DIR/sc-123`, creating it when it's missing; and a bare `--focus` names the notebook after the current directory, so from `~/work/stories/sc-123` it opens `$QUOLL_DIR/sc-123`. `--dir` overrides `QUOLL_DIR` for one run. Without it, the notebook root is the current directory, and `--focus` needs a name. A folder named on the command line is opened as it is.
@@ -34,7 +35,7 @@ Follow mode jumps to whatever page in the notebook changed last, at the changed 
 
 Images show through kitty graphics, inside komux too. ` ```mermaid ` blocks are drawn as images by mermaid's command-line tool, which drives the installed Chrome or Chromium (`QUOLL_CHROME` picks another). Drawings are kept in `$XDG_STATE_HOME/quoll/mermaid`, so a diagram is drawn once and again only when it changes. While one draws, and wherever images can't show, the block shows its source; a diagram that fails to draw shows its source and mermaid's error.
 
-`quoll setup` shows whether quoll's skill for Claude is linked into Claude Code's config (`~/.claude/skills`, or under `CLAUDE_CONFIG_DIR`). The skill tells Claude how to keep a notebook, point you at a page with `quoll show`, and notice your edits with `quoll watch`. `quoll setup --yes` links it, so it follows this checkout as you update it, and `quoll setup --remove` takes the link out again.
+`quoll setup` shows whether quoll's skill for Claude is linked into Claude Code's config (`~/.claude/skills`, or under `CLAUDE_CONFIG_DIR`). The skill points Claude at `quoll guide`, which teaches it a page at a time how to keep a notebook, point you at a page with `quoll show`, and notice your edits with `quoll watch`. `quoll setup --yes` links it, so it follows this checkout as you update it, and `quoll setup --remove` takes the link out again.
 
 ## The README recording
 

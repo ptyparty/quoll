@@ -48,7 +48,7 @@ def prepare(repo):
     notebooks = os.path.join(ROOT, 'notebooks')
     os.makedirs(notebooks)
     hs.write_komux_config(env, KOMUX_CONFIG, project=project, notebooks=notebooks)
-    hs.claude_config(sandbox, project, [os.path.join(repo, 'skills', 'quoll')], env, trim_watch=True)
+    hs.claude_config(sandbox, project, [os.path.join(repo, 'skills', 'quoll')], env)
     return project, env
 
 
