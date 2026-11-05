@@ -8,6 +8,7 @@ import type { MermaidRenderer } from "../render/mermaid.ts";
 import { fitHints, hintParts, partsWidth, pill, styled, type Hint, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
 import { contains, indexPage, listFiles, listPages, overlaps, pagesByTag, readPage, resolveAsset, resolveTarget } from "../notebook.ts";
+import { isCopyableImage, type Clip, type CopyToClipboard } from "../clipboard.ts";
 import { commentContext } from "../comment.ts";
 import type { ContextRequest } from "../context.ts";
 import type { GitStatus, NotebookGit } from "../git.ts";
@@ -27,6 +28,7 @@ export type ViewerOptions = {
   follow: boolean;
   mermaid?: MermaidRenderer;
   git?: NotebookGit;
+  clipboard?: CopyToClipboard;
 };
 
 type Picker = { state: PickerState<() => void> };
@@ -39,7 +41,7 @@ type Section = { first: number; last: number };
 type ScrollTarget = { line: number } | { top: number } | { centre: Section };
 type BlockFrame = { frame: BoxRenderable; gutter: TextRenderable };
 type PageMarks = { changed: Set<number>; removed: Set<number> };
-type Commenting = { selected: number; hints: Map<string, number>; top: number | undefined; settleFrames: number };
+type BlockPick = { verb: string; mode: string; choose: (index: number) => void; selected: number; hints: Map<string, number>; top: number | undefined; settleFrames: number };
 type Upload = { key: string; id: number; cols: number; rows: number };
 
 const imageMargin = { cols: 4, rows: 4 };
@@ -76,7 +78,7 @@ export class Viewer {
   private marked: { view: MarkdownRenderable; text: string; at: string } | undefined;
   private gaps: TextRenderable[] = [];
   private gutters: TextRenderable[] = [];
-  private commenting: Commenting | undefined;
+  private blockPick: BlockPick | undefined;
   private asking: ContextRequest | undefined;
   private picker: Picker | undefined;
   private mindMap: NotebookMapState | undefined;
@@ -449,7 +451,7 @@ export class Viewer {
       view.destroyRecursively();
     }
     const files = this.lazyFiles();
-    this.commenting = undefined;
+    this.blockPick = undefined;
     this.asking?.cancel();
     this.asking = undefined;
     const views = this.document.blocks.map((block) => this.blockView(block, page, files));
@@ -511,7 +513,7 @@ export class Viewer {
       customBorderChars: noBarChars,
       borderColor: theme.quoll,
       onMouseDown: (event) => {
-        if (event.button === MouseButton.LEFT && this.commenting && !this.picker && !this.editing && this.page) this.comment(index);
+        if (event.button === MouseButton.LEFT && this.blockPick && !this.picker && !this.editing && this.page) this.blockPick.choose(index);
       },
     });
     const gutter = new TextRenderable(this.renderer, { content: "", width: 0, flexShrink: 0, wrapMode: "none" });
@@ -672,7 +674,7 @@ export class Viewer {
     if (this.editing) return [];
     const picker = this.picker;
     if (picker) return pickerBindings.map((binding) => ({ ...binding, run: binding.run && (() => this.pickerDone(binding.run!(picker.state))) }));
-    if (this.commenting) return this.attachBindings();
+    if (this.blockPick) return this.blockPickBindings();
     if (this.helpView.open) return this.helpBindings();
     if (this.menu) return this.menuBindings(this.menu);
     if (this.search?.typing) return this.searchPromptBindings();
@@ -691,8 +693,8 @@ export class Viewer {
     const text = typedText(key);
     if (this.picker) {
       this.pickerDone(pickerKey(this.picker.state, key));
-    } else if (this.commenting) {
-      if (key.name && !key.ctrl && this.commenting.hints.has(key.name)) this.comment(this.commenting.hints.get(key.name)!);
+    } else if (this.blockPick) {
+      if (key.name && !key.ctrl && this.blockPick.hints.has(key.name)) this.blockPick.choose(this.blockPick.hints.get(key.name)!);
     } else if (this.helpView.open) {
       return;
     } else if (this.menu) {
@@ -722,6 +724,7 @@ export class Viewer {
       { group: "Search", label: "previous match", on: ["N"], when: searching, run: () => this.nextMatch(-1) },
       { group: "Search", label: "clear the search", on: ["escape"], when: searching, run: () => this.clearSearch() },
       { group: "Page", label: "edit", on: ["e"], menu: "e", run: () => void this.edit() },
+      { group: "Page", label: "copy a block or image", on: ["y"], menu: "y", when: () => this.options.clipboard !== undefined, run: () => this.startCopying() },
       { group: "Page", label: "reload", on: ["r"], menu: "r", run: () => this.reload() },
       { group: "Page", label: this.following ? "stop following edits" : "follow edits", on: ["w"], menu: "w", run: () => this.toggleFollow() },
       ...this.scrollBindings(),
@@ -771,15 +774,16 @@ export class Viewer {
     return [{ group: "Atlas", label: "page or atlas", on: ["tab"], run: () => this.focusMap(!this.mapFocused) }];
   }
 
-  private attachBindings(): Binding<() => void>[] {
-    const commenting = this.commenting!;
+  private blockPickBindings(): Binding<() => void>[] {
+    const pick = this.blockPick!;
     const last = this.blockViews.length - 1;
+    const group = pick.verb[0]!.toUpperCase() + pick.verb.slice(1);
     return [
-      { group: "Attach", label: "attach a block", on: [], keys: "a–z" },
-      { group: "Attach", label: "next block", on: ["j", "down"], run: () => this.selectBlock(Math.min(commenting.selected + 1, last)) },
-      { group: "Attach", label: "previous block", on: ["k", "up"], run: () => this.selectBlock(Math.max(commenting.selected - 1, 0)) },
-      { group: "Attach", label: "attach the selected block", on: ["return"], run: () => this.comment(commenting.selected) },
-      { group: "Attach", label: "cancel", on: ["escape", "q", "^c"], run: () => this.cancelCommenting() },
+      { group, label: `${pick.verb} a block`, on: [], keys: "a–z" },
+      { group, label: "next block", on: ["j", "down"], run: () => this.selectBlock(Math.min(pick.selected + 1, last)) },
+      { group, label: "previous block", on: ["k", "up"], run: () => this.selectBlock(Math.max(pick.selected - 1, 0)) },
+      { group, label: `${pick.verb} the selected block`, on: ["return"], run: () => pick.choose(pick.selected) },
+      { group, label: "cancel", on: ["escape", "q", "^c"], run: () => this.cancelBlockPick() },
     ];
   }
 
@@ -1245,49 +1249,55 @@ export class Viewer {
     request.onCancel(() => {
       if (this.asking !== request) return;
       this.asking = undefined;
-      this.stopCommenting();
+      this.stopBlockPick();
       this.renderer.requestRender();
     });
     this.refocusMap = this.mindMap !== undefined && this.mapFocused;
     if (this.mindMap) this.focusMap(false);
-    this.startCommenting();
+    this.startBlockPick("attach", "ATTACH", (index) => this.comment(index));
     request.picking("Pick a block in quoll · Esc cancels");
     this.renderer.requestRender();
   }
 
-  private startCommenting(): void {
+  private startCopying(): void {
+    if (!this.page || this.blockViews.length === 0) return this.flash("No page open to copy from");
+    this.startBlockPick("copy", "COPY", (index) => void this.copyBlock(index));
+    this.renderer.requestRender();
+  }
+
+  private startBlockPick(verb: string, mode: string, choose: (index: number) => void): void {
     this.closeMenu();
     this.helpView.render("", undefined);
     this.stopFollowing();
-    this.commenting = { selected: this.visibleBlocks()[0] ?? 0, hints: new Map(), top: undefined, settleFrames: 3 };
+    this.blockPick = { verb, mode, choose, selected: this.visibleBlocks()[0] ?? 0, hints: new Map(), top: undefined, settleFrames: 3 };
     this.renderHints();
   }
 
   private settleHints(): void {
-    const commenting = this.commenting;
-    if (!commenting) return;
-    if (commenting.settleFrames > 0) {
-      commenting.settleFrames--;
+    const pick = this.blockPick;
+    if (!pick) return;
+    if (pick.settleFrames > 0) {
+      pick.settleFrames--;
       this.renderer.requestRender();
-      if (commenting.settleFrames > 0) return;
-    } else if (commenting.top === this.scroll.scrollTop) {
+      if (pick.settleFrames > 0) return;
+    } else if (pick.top === this.scroll.scrollTop) {
       return;
     }
     this.assignHints();
   }
 
   private assignHints(): void {
-    const commenting = this.commenting!;
+    const pick = this.blockPick!;
     const visible = this.visibleBlocks();
-    if (!visible.includes(commenting.selected)) commenting.selected = visible[0] ?? Math.max(commenting.selected, 0);
-    commenting.hints = new Map(visible.slice(0, hintLetters.length).map((index, at) => [hintLetters[at]!, index]));
-    commenting.top = this.scroll.scrollTop;
+    if (!visible.includes(pick.selected)) pick.selected = visible[0] ?? Math.max(pick.selected, 0);
+    pick.hints = new Map(visible.slice(0, hintLetters.length).map((index, at) => [hintLetters[at]!, index]));
+    pick.top = this.scroll.scrollTop;
     this.renderHints();
     this.renderer.requestRender();
   }
 
   private selectBlock(index: number): void {
-    this.commenting!.selected = index;
+    this.blockPick!.selected = index;
     const top = this.blockTop(index);
     const bottom = top + (this.blockViews[index]?.height ?? 1);
     if (top < this.scroll.scrollTop) this.scroll.scrollTo(top);
@@ -1296,15 +1306,15 @@ export class Viewer {
     this.assignHints();
   }
 
-  private cancelCommenting(): void {
+  private cancelBlockPick(): void {
     const asking = this.asking;
     this.asking = undefined;
     asking?.cancel();
-    this.stopCommenting();
+    this.stopBlockPick();
   }
 
-  private stopCommenting(): void {
-    this.commenting = undefined;
+  private stopBlockPick(): void {
+    this.blockPick = undefined;
     if (this.refocusMap && this.mindMap) this.focusMap(true);
     this.refocusMap = false;
     this.renderHints();
@@ -1317,12 +1327,12 @@ export class Viewer {
   }
 
   private renderHints(): void {
-    const commenting = this.commenting;
-    const letters = new Map([...(commenting?.hints ?? [])].map(([letter, index]) => [index, letter]));
+    const pick = this.blockPick;
+    const letters = new Map([...(pick?.hints ?? [])].map(([letter, index]) => [index, letter]));
     this.gutters.forEach((gutter, index) => {
-      const selected = commenting?.selected === index;
-      gutter.width = commenting ? 2 : 0;
-      gutter.content = commenting ? styled([selected ? bold(fg(theme.quoll)(letters.get(index) ?? "▌")) : fg(theme.muted)(letters.get(index) ?? " ")]) : "";
+      const selected = pick?.selected === index;
+      gutter.width = pick ? 2 : 0;
+      gutter.content = pick ? styled([selected ? bold(fg(theme.quoll)(letters.get(index) ?? "▌")) : fg(theme.muted)(letters.get(index) ?? " ")]) : "";
       this.blockViews[index]!.backgroundColor = selected ? theme.surface : "transparent";
     });
     this.renderStatus();
@@ -1341,14 +1351,43 @@ export class Viewer {
     return (this.blockViews[index]?.y ?? 0) - this.scroll.content.y;
   }
 
+  private async copyBlock(index: number): Promise<void> {
+    const page = this.page;
+    const block = this.document.blocks[index];
+    const clipboard = this.options.clipboard;
+    this.stopBlockPick();
+    if (!page || !block || !clipboard) return;
+    const clip = this.clipOf(page, block);
+    if (!clip) return this.flash("Nothing to copy: the page has no source yet");
+    let failed: string | undefined;
+    try {
+      failed = await clipboard(clip);
+    } catch (error) {
+      failed = `Could not copy: ${(error as Error).message}`;
+    }
+    this.flash(failed ?? ("file" in clip ? `Copied ${basename(clip.file)}; paste it into a GitHub comment to upload it` : `Copied ${lineRange(block)}`));
+    this.renderer.requestRender();
+  }
+
+  private clipOf(page: string, block: Block): Clip | undefined {
+    const file = this.blockAsset(page, block);
+    if (file && isCopyableImage(file)) return { file };
+    const source = this.sourceOf(page);
+    return source === undefined ? undefined : { text: source.split("\n").slice(block.startLine, block.endLine + 1).join("\n") };
+  }
+
+  private blockAsset(page: string, block: Block): string | undefined {
+    return block.kind === "image" ? resolveAsset(this.options.root, page, block.target, this.lazyFiles()) : undefined;
+  }
+
   private comment(index: number): void {
     const page = this.page;
     const block = this.document.blocks[index];
     const asking = this.asking;
     this.asking = undefined;
-    this.stopCommenting();
+    this.stopBlockPick();
     if (!page || !block || !asking) return asking?.cancel();
-    const asset = block.kind === "image" ? resolveAsset(this.options.root, page, block.target, this.lazyFiles()) : undefined;
+    const asset = this.blockAsset(page, block);
     const source = this.known.get(page) ?? "";
     const comment = commentContext({ page, file: join(this.options.root, page), source, block, headings: this.document.headings, ...(asset ? { asset } : {}) });
     asking.attach([comment]);
@@ -1393,7 +1432,7 @@ export class Viewer {
   }
 
   private mode(): string {
-    if (this.commenting) return "ATTACH";
+    if (this.blockPick) return this.blockPick.mode;
     if (this.mindMap) return "ATLAS";
     if (this.gitStatus?.merging) return "MERGE";
     return this.following ? "FOLLOW" : "READ";
@@ -1405,13 +1444,15 @@ export class Viewer {
         ["Enter", "keep"],
         ["Esc", "cancel"],
       ];
-    if (this.commenting)
+    if (this.blockPick) {
+      const verb = this.blockPick.verb;
       return [
-        ["a–z", "attach"],
+        ["a–z", verb],
         ["j/k", "move"],
-        ["Enter", "attach selected"],
+        ["Enter", `${verb} selected`],
         ["Esc", "cancel"],
       ];
+    }
     if (this.mindMap?.filter !== undefined)
       return [
         ["type", "filter"],
@@ -1549,4 +1590,8 @@ function ago(modified: number): string {
   const hours = Math.round(minutes / 60);
   if (hours < 48) return `${hours}h ago`;
   return `${Math.round(hours / 24)}d ago`;
+}
+
+function lineRange(block: Block): string {
+  return block.startLine === block.endLine ? `line ${block.startLine + 1}` : `lines ${block.startLine + 1}–${block.endLine + 1}`;
 }

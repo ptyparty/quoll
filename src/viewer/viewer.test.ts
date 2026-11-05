@@ -8,6 +8,7 @@ import { MermaidRenderer } from "../render/mermaid.ts";
 import { theme } from "../render/theme.ts";
 import { tinyPng } from "../render/test-images.ts";
 import { Viewer, type ViewerOptions } from "./viewer.ts";
+import type { Clip } from "../clipboard.ts";
 import { ContextRequest } from "../context.ts";
 
 let setup: TestRendererSetup | undefined;
@@ -587,6 +588,57 @@ describe("viewer", () => {
       expect(await settle(setup)).toContain("a–z attach");
       asking.end();
       expect(await settle(setup)).toContain("f links");
+    });
+
+    test("y picks a block to copy: its markdown, or the picture for an image", async () => {
+      writeFileSync(join(root, "index.md"), `${page}\n\n![shot](shot.png)\n`);
+      writeFileSync(join(root, "shot.png"), "not really a png");
+      const clips: Clip[] = [];
+      const { setup } = await open(false, { clipboard: async (clip) => void clips.push(clip) });
+      setup.mockInput.pressKey("y");
+      let frame = await settle(setup);
+      expect(frame).toContain("COPY");
+      expect(frame).toContain("a–z copy");
+      setup.mockInput.pressKey("f");
+      frame = await settle(setup);
+      expect(clips).toEqual([{ text: "- ship it" }]);
+      expect(frame).toContain("READ");
+      expect(frame).toContain("Copied line 7");
+
+      setup.mockInput.pressKey("y");
+      await settle(setup);
+      setup.mockInput.pressKey("l");
+      await settle(setup);
+      expect(clips.at(-1)).toEqual({ file: join(root, "shot.png") });
+      expect(await settle(setup)).toContain("Copied shot.png; paste it into a GitHub comment");
+    });
+
+    test("y copies an image quoll can't paste as a picture as its markdown", async () => {
+      writeFileSync(join(root, "index.md"), "# Plan\n\n![arch](arch.svg)\n");
+      writeFileSync(join(root, "arch.svg"), "<svg/>");
+      const clips: Clip[] = [];
+      const { setup } = await open(false, { clipboard: async (clip) => void clips.push(clip) });
+      setup.mockInput.pressKey("y");
+      await settle(setup);
+      setup.mockInput.pressKey("s");
+      await settle(setup);
+      expect(clips).toEqual([{ text: "![arch](arch.svg)" }]);
+    });
+
+    test("y shows why a copy failed, and Esc leaves without copying", async () => {
+      writeFileSync(join(root, "index.md"), page);
+      const clips: Clip[] = [];
+      const { setup } = await open(false, { clipboard: async (clip) => (clips.push(clip), "no clipboard tool") });
+      setup.mockInput.pressKey("y");
+      await settle(setup);
+      setup.mockInput.pressEscape();
+      expect(await settle(setup)).toContain("f links");
+      expect(clips).toEqual([]);
+      setup.mockInput.pressKey("y");
+      await settle(setup);
+      setup.mockInput.pressKey("s");
+      expect(await settle(setup)).toContain("no clipboard tool");
+      expect(clips).toEqual([{ text: "intro line" }]);
     });
 
     test("c no longer starts picking on its own", async () => {
