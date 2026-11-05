@@ -12,6 +12,8 @@ import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.t
 import { notebookRoots, RootChoices, rootChoicesFile } from "./roots.ts";
 import { listen, send, tabViewerRoot } from "./socket.ts";
 import { pickRoot } from "./viewer/root-picker.ts";
+import { editorCommand } from "./editor.ts";
+import { notebookGit } from "./git.ts";
 import { Viewer } from "./viewer/viewer.ts";
 import { watchNotebook } from "./watch.ts";
 
@@ -256,12 +258,13 @@ async function view(renderer: CliRenderer, root: string, follow: boolean): Promi
   const viewer = new Viewer(renderer, {
     root,
     follow,
+    git: notebookGit(root),
     mermaid: new MermaidRenderer(mermaidCacheDir(), findChrome()),
     images: () => terminalImageOutput(renderer.capabilities?.kitty_graphics ?? false),
     edit: async (file, line) => {
       await renderer.suspend();
       try {
-        await Bun.spawn(["hx", `${file}:${line}`], { stdio: ["inherit", "inherit", "inherit"] }).exited;
+        await Bun.spawn(editorCommand(file, line), { stdio: ["inherit", "inherit", "inherit"] }).exited;
       } finally {
         await renderer.resume();
       }

@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument } from "./document.ts";
+import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument, resolveConflict } from "./document.ts";
 
 describe("parseDocument", () => {
-  test("splits markdown into headings, paragraphs, lists and tables, each with its source lines", () => {
+  test("splits markdown into headings, paragraphs, list items and tables, each with its source lines", () => {
     const doc = parseDocument("# Plan\nintro\n\n## Rollout\nsteps\nmore steps\n\n- one\n- two\n\n| a |\n|---|\n| 1 |\n");
     expect(doc.blocks.map((block) => [block.startLine, block.endLine, block.kind === "markdown" ? block.text : ""])).toEqual([
       [0, 0, "# Plan"],
       [1, 1, "intro"],
       [3, 3, "## Rollout"],
       [4, 5, "steps\nmore steps"],
-      [7, 8, "- one\n- two"],
+      [7, 7, "- one"],
+      [8, 8, "- two"],
       [10, 12, "| a |\n|---|\n| 1 |"],
     ]);
     expect(doc.headings).toEqual([
@@ -23,8 +24,43 @@ describe("parseDocument", () => {
     expect(doc.blocks.map((block) => [block.startLine, block.endLine, block.kind === "markdown" ? block.text : ""])).toEqual([
       [0, 0, "# A"],
       [1, 2, "hello\nworld"],
-      [4, 5, "- x\n- y"],
+      [4, 4, "- x"],
+      [5, 5, "- y"],
     ]);
+  });
+
+  test("keeps an item's nested list and continuation lines with it, and marks items of one list alike", () => {
+    const doc = parseDocument("1. first\n   still first\n   - nested\n2. second\n\npara");
+    expect(doc.blocks.map((block) => [block.startLine, block.endLine, block.kind === "markdown" ? block.list : "x"])).toEqual([
+      [0, 2, 0],
+      [3, 3, 0],
+      [5, 5, undefined],
+    ]);
+  });
+
+  test("reads a merge conflict as one block with both sides, skipping a diff3 base, and settles it", () => {
+    const source = "# A\n<<<<<<< HEAD\nmine\n||||||| base\nold\n=======\ntheirs\n>>>>>>> origin/main\nafter";
+    const doc = parseDocument(source);
+    const conflict = doc.blocks[1]!;
+    expect(conflict).toEqual({ kind: "conflict", ours: "mine", theirs: "theirs", oursLabel: "HEAD", theirsLabel: "origin/main", startLine: 1, endLine: 7 });
+    if (conflict.kind !== "conflict") throw new Error("not a conflict");
+    expect(resolveConflict(source, conflict, "ours")).toBe("# A\nmine\nafter");
+    expect(resolveConflict(source, conflict, "theirs")).toBe("# A\ntheirs\nafter");
+    expect(resolveConflict(source, conflict, "both")).toBe("# A\nmine\ntheirs\nafter");
+  });
+
+  test("reads longer conflict markers, so a setext underline inside a side stays in that side", () => {
+    const fence = (char: string) => char.repeat(13);
+    const source = [`${fence("<")} HEAD`, "Title", "=======", "mine", fence("="), "theirs", `${fence(">")} origin/main`].join("\n");
+    const conflict = parseDocument(source).blocks[0]!;
+    expect(conflict.kind === "conflict" && [conflict.ours, conflict.theirs]).toEqual(["Title\n=======\nmine", "theirs"]);
+  });
+
+  test("keeps a file's Windows line endings when settling a conflict", () => {
+    const source = "a\r\n<<<<<<< HEAD\r\nmine\r\n=======\r\ntheirs\r\n>>>>>>> x\r\nb";
+    const conflict = parseDocument(source).blocks.find((block) => block.kind === "conflict")!;
+    if (conflict.kind !== "conflict") throw new Error("not a conflict");
+    expect(resolveConflict(source, conflict, "both")).toBe("a\r\nmine\r\ntheirs\r\nb");
   });
 
   test("turns image embeds on their own line into image blocks", () => {
@@ -38,12 +74,17 @@ describe("parseDocument", () => {
   test("collects wiki and markdown links and shows wiki links by label", () => {
     const doc = parseDocument("See [[plan#Rollout|the rollout]] and [notes](notes.md) or ![[other page]].");
     expect(doc.links).toEqual([
-      { label: "the rollout", target: "plan#Rollout", line: 0 },
-      { label: "other page", target: "other page", line: 0 },
-      { label: "notes", target: "notes.md", line: 0 },
+      { label: "the rollout", target: "plan#Rollout", line: 0, lead: false },
+      { label: "other page", target: "other page", line: 0, lead: false },
+      { label: "notes", target: "notes.md", line: 0, lead: false },
     ]);
     const block = doc.blocks[0]!;
     expect(block.kind === "markdown" && block.text).toBe("See **the rollout** and [notes](notes.md) or ↪ **other page**.");
+  });
+
+  test("marks a link that opens a list item, as an index's entries do", () => {
+    const doc = parseDocument("- [Plan](plan.md): the work queue, see [notes](notes.md)\n1. [[decisions]]");
+    expect(doc.links.map((link) => `${link.label} ${link.lead}`)).toEqual(["Plan true", "notes false", "decisions true"]);
   });
 
   test("turns a mermaid fence into a diagram block and leaves other fences as markdown", () => {

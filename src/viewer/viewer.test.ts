@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { MouseButtons, createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MermaidRenderer } from "../render/mermaid.ts";
@@ -107,6 +107,54 @@ describe("viewer", () => {
     expect(viewer.isFollowing).toBe(false);
     setup.mockInput.pressKey("H", { shift: true });
     frame = await settle(setup);
+    expect(viewer.page).toBe("index.md");
+  });
+
+  test("walks the notebook's tree in the map, scrolls the page with Tab, and lands or exits", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n## Design\n\nSee [[plan|the plan]].");
+    writeFileSync(join(root, "design", "plan.md"), longPlan);
+    const { setup, viewer } = await open();
+    setup.mockInput.pressKey("a");
+    let frame = await settle(setup);
+    expect(frame).toContain("▤ Plan ›");
+    expect(frame).toContain("Rollout");
+    expect(frame).toMatch(/^ Index › Plan\s*$/m);
+    setup.mockInput.pressKey("l");
+    frame = await settle(setup);
+    expect(viewer.page).toBe("design/plan.md");
+    expect(frame).toContain("ship it carefully");
+    expect(frame).not.toContain("intro");
+    setup.mockInput.pressTab();
+    for (let line = 0; line < 3; line++) setup.mockInput.pressKey("k");
+    frame = await settle(setup);
+    expect(frame).toContain("page: scroll");
+    expect(frame).toContain("filler 37");
+    expect(frame).toContain("│ Rollout");
+    setup.mockInput.pressTab();
+    setup.mockInput.pressTab();
+    setup.mockInput.pressKey("q");
+    await settle(setup);
+    expect((viewer as unknown as { mindMap?: unknown }).mindMap).toBeUndefined();
+    setup.mockInput.pressKey("a");
+    await settle(setup);
+    setup.mockInput.pressKey("l");
+    await settle(setup);
+    for (const ch of "/roll") setup.mockInput.pressKey(ch);
+    frame = await settle(setup);
+    expect(frame).toMatch(/^ \/roll  1\/1  │ Index › Plan › Rollout/m);
+    setup.mockInput.pressEscape();
+    await settle(setup);
+    setup.mockInput.pressEscape();
+    frame = await settle(setup);
+    expect(viewer.page).toBe("index.md");
+    expect(frame).not.toContain("Rollout");
+    for (const name of ["a", "l", "a"]) setup.mockInput.pressKey(name);
+    frame = await settle(setup);
+    expect(viewer.page).toBe("design/plan.md");
+    expect(frame).not.toContain("Plan ›");
+    expect(frame).toContain("ship it carefully");
+    setup.mockInput.pressKey("H", { shift: true });
+    await settle(setup);
     expect(viewer.page).toBe("index.md");
   });
 
@@ -348,6 +396,78 @@ describe("viewer", () => {
     expect(viewer.show("index", root)).toEqual({ ignored: true });
   });
 
+  test("shows commits to push and pull, and syncs them on P", async () => {
+    writeFileSync(join(root, "index.md"), "# Index");
+    let status = { ahead: 2, behind: 1, merging: false, conflicts: [] as string[], elsewhere: [] as string[] };
+    const syncs: number[] = [];
+    const git = {
+      status: async () => status,
+      fetch: async () => {},
+      sync: async () => (syncs.push(status.ahead), (status = { ...status, ahead: 0, behind: 0 }), { pushed: syncs.at(-1)! }),
+      abort: async () => undefined,
+    };
+    const { setup } = await open(false, { git });
+    let frame = await settle(setup);
+    expect(frame).toContain("↑2 ↓1 P sync");
+    setup.mockInput.pressKey("P", { shift: true });
+    await Bun.sleep(20);
+    frame = await settle(setup);
+    expect(syncs).toEqual([2]);
+    expect(frame).toContain("Pushed 2 commits");
+    expect(frame).not.toContain("↑2");
+  });
+
+  test("won't settle a conflict that changed on disk since the page was drawn", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> x\n");
+    const { setup, viewer } = await open(false);
+    await settle(setup);
+    setup.mockInput.pressKey("n");
+    await settle(setup);
+    const changed = "# Index\n\n<<<<<<< HEAD\nmine, edited\n=======\ntheirs\n>>>>>>> x\n";
+    writeFileSync(join(root, "index.md"), changed);
+    setup.mockInput.pressKey("1");
+    const frame = await settle(setup);
+    expect(readFileSync(join(root, "index.md"), "utf8")).toBe(changed);
+    expect(frame).toContain("The page changed on disk");
+    expect(viewer.page).toBe("index.md");
+  });
+
+  test("pops up the merge's conflicts outside this notebook, which block finishing it", async () => {
+    writeFileSync(join(root, "index.md"), "# Index");
+    const status = { ahead: 1, behind: 0, merging: true, conflicts: [] as string[], elsewhere: ["/work/notes/other/plan.md"] };
+    const git = { status: async () => status, fetch: async () => {}, sync: async () => ({ conflicts: [] as string[] }), abort: async () => undefined };
+    const { setup } = await open(false, { git });
+    let frame = await settle(setup);
+    expect(frame).toContain("1 elsewhere");
+    setup.mockInput.pressKey("P", { shift: true });
+    await Bun.sleep(20);
+    frame = await settle(setup);
+    expect(frame).toContain("outside this notebook");
+    expect(frame).toContain("/work/notes/other/plan.md");
+    setup.mockInput.pressEnter();
+    await Bun.sleep(20);
+    await settle(setup);
+    expect(edits).toEqual([{ file: "/work/notes/other/plan.md", line: 1 }]);
+  });
+
+  test("draws a merge conflict as both sides, and settles it with a key", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> origin/main\n\nafter");
+    const status = { ahead: 1, behind: 0, merging: true, conflicts: ["index.md"], elsewhere: [] as string[] };
+    const git = { status: async () => status, fetch: async () => {}, sync: async () => ({ conflicts: status.conflicts }), abort: async () => undefined };
+    const { setup } = await open(false, { git });
+    let frame = await settle(setup);
+    expect(frame).toContain("merge conflict");
+    expect(frame).toContain("yours · HEAD");
+    expect(frame).toContain("theirs · origin/main");
+    expect(frame).toContain("⚠ merging · 1 conflicted page · P finish · X abort");
+    setup.mockInput.pressKey("n");
+    await settle(setup);
+    setup.mockInput.pressKey("b");
+    frame = await settle(setup);
+    expect(readFileSync(join(root, "index.md"), "utf8")).toBe("# Index\n\nmine\ntheirs\n\nafter");
+    expect(frame).not.toContain("merge conflict");
+  });
+
   describe("context for komux", () => {
     const page = ["# Plan", "", "intro line", "", "## Rollout", "", "- ship it", "- watch it", "", "last words"].join("\n");
 
@@ -367,7 +487,7 @@ describe("viewer", () => {
 
     const labels = (replies: unknown[]) => replies.flatMap((reply) => ((reply as { attach?: { label: string }[] }).attach ?? []).map((attachment) => attachment.label));
 
-    test("puts a hint letter by each block, and pressing one attaches that block", async () => {
+    test("puts a hint letter by each block and list item, and pressing one attaches it", async () => {
       const { setup, replies } = await asked();
       const frame = await settle(setup);
       expect(frame).toMatch(/^\s*a\s+.*Plan/m);
@@ -377,9 +497,25 @@ describe("viewer", () => {
       await settle(setup);
       expect(replies).toEqual([
         { picking: "Pick a block in quoll · Esc cancels" },
-        { attach: [{ label: 'index.md:7–8 · "ship it"', text: `Comment on index.md, lines 7–8 under "Plan › Rollout":\nFile: ${join(root, "index.md")}\n> - ship it\n> - watch it\n` }] },
+        { attach: [{ label: 'index.md:7 · "ship it"', text: `Comment on index.md, line 7 under "Plan › Rollout":\nFile: ${join(root, "index.md")}\n> - ship it\n` }] },
       ]);
-      expect(await settle(setup)).toContain('Attached index.md:7–8 · "ship it"');
+      expect(await settle(setup)).toContain('Attached index.md:7 · "ship it"');
+    });
+
+    test("picks a block on the page below while the mind map is open, then hands the map its keys back", async () => {
+      writeFileSync(join(root, "index.md"), page);
+      const { setup, viewer } = await open(false);
+      setup.mockInput.pressKey("a");
+      await settle(setup);
+      const { request: asking, replies } = request();
+      viewer.askForContext(asking);
+      let frame = await settle(setup);
+      expect(frame).toContain("attach: a letter");
+      setup.mockInput.pressKey("s");
+      frame = await settle(setup);
+      expect(labels(replies)).toEqual(['index.md:3 · "intro line"']);
+      expect(frame).toMatch(/^ Plan › Rollout\s*$/m);
+      expect((viewer as unknown as { mapFocused: boolean }).mapFocused).toBe(true);
     });
 
     test("j and k move the selection, Enter attaches it, and Esc cancels", async () => {

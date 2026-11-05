@@ -23,7 +23,7 @@ Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll`
 
 Inside komux, `quoll show`, `quoll path`, `quoll watch` and `quoll tags` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
 
-Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `t` tags · `o` outline · `i` index · `H`/`L` back and forward · `e` edit in helix · `w` follow · `r` reload · `q` quit.
+Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `t` tags · `o` outline · `a` atlas · `i` index · `H`/`L` back and forward · `e` edit in `$VISUAL` or `$EDITOR` (helix if neither is set) · `w` follow · `P` sync the notebook (pull, merge, push; shown as `↑n ↓n`) · in a merge: `n` next conflict, `1`/`2`/`b` keep yours/theirs/both, `X` abort · `r` reload · `q` quit.
 
 Inside komux, **Alt+shift+c** on quoll attaches a block of the page to a message for the tab's Claude: pick one by its hint letter, by moving with `j`/`k` and pressing Enter, or by clicking it, and komux's message box opens with the block's file, line numbers, heading path and source attached. quoll listens for komux on a socket in the tab's folder while it runs.
 
