@@ -1,4 +1,4 @@
-import { BorderChars, BoxRenderable, MarkdownRenderable, MouseButton, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
+import { BorderChars, BoxRenderable, CodeRenderable, MarkdownRenderable, MouseButton, ScrollBoxRenderable, TextRenderable, TextTableRenderable, bg, bold, fg, type TextChunk, type TextTableContent, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument, resolveConflict, type Block, type Document, type Resolution } from "../document.ts";
@@ -13,9 +13,12 @@ import type { ContextRequest } from "../context.ts";
 import type { GitStatus, NotebookGit } from "../git.ts";
 import type { Reply } from "../socket.ts";
 import { History } from "./history.ts";
-import { PickerState, PickerView, pickerKey, type PickerItem } from "./picker.ts";
-import { MindMapView, type Where } from "./mindmap.ts";
-import { NotebookMapState, buildNotebookTree, notebookMapKey } from "./notebook-map.ts";
+import { PickerState, PickerView, pickerBindings, type PickerItem, type PickerOutcome } from "./picker.ts";
+import { MindMapView, type MapNode, type Where } from "./mindmap.ts";
+import { NotebookMapState, atlasBindings, atlasFilterBindings, buildNotebookTree, type NotebookMapOutcome } from "./notebook-map.ts";
+import { HelpView, MenuView, type MenuGroup } from "./key-cards.ts";
+import { active, bindingFor, keyGroups, type AppKeys, type Binding } from "./keys.ts";
+import { findMatches, markMatches } from "./search.ts";
 
 export type ViewerOptions = {
   root: string;
@@ -27,6 +30,9 @@ export type ViewerOptions = {
 };
 
 type Picker = { state: PickerState<() => void> };
+type SearchMatch = { target: Searchable; ordinal: number; row: number };
+type Searchable = CodeRenderable | TextTableRenderable;
+type Search = { query: string; typing: boolean; current: number; matches: SearchMatch[]; targets: Searchable[]; texts: string; from: number };
 type Section = { first: number; last: number };
 type ScrollTarget = { line: number } | { top: number } | { centre: Section };
 type BlockFrame = { frame: BoxRenderable; gutter: TextRenderable };
@@ -49,6 +55,8 @@ export class Viewer {
   private readonly scroll: ScrollBoxRenderable;
   private readonly status: TextRenderable;
   private readonly pickerView: PickerView;
+  private readonly menuView: MenuView;
+  private readonly helpView: HelpView;
   private readonly mindMapView: MindMapView;
   private readonly style: SyntaxStyle;
   private readonly markingStyle: SyntaxStyle;
@@ -71,6 +79,11 @@ export class Viewer {
   private picker: Picker | undefined;
   private mindMap: NotebookMapState | undefined;
   private mapFocused = true;
+  private mapNode: MapNode | undefined;
+  private menu: Binding<() => void>[] | undefined;
+  private search: Search | undefined;
+  private painted = new WeakMap<Searchable, string>();
+  private tableSources = new WeakMap<TextTableRenderable, TextTableContent>();
   private refocusMap = false;
   private mapReturn: { page: string | undefined; top: number } | undefined;
   private section: Section | undefined;
@@ -117,6 +130,8 @@ export class Viewer {
     frame.add(this.status);
     renderer.root.add(frame);
     this.pickerView = new PickerView(renderer);
+    this.menuView = new MenuView(renderer);
+    this.helpView = new HelpView(renderer);
     for (const page of listPages(options.root)) this.remember(page.path);
     renderer.keyInput.on("keypress", this.onKey);
     renderer.on("resize", this.onResize);
@@ -406,6 +421,7 @@ export class Viewer {
   }
 
   private load(page: string): void {
+    if (page !== this.shown) this.search = undefined;
     this.shown = page;
     const text = this.remember(page);
     this.document = parseDocument(text ?? `# ${page}\n\nThis page doesn't exist yet.`);
@@ -418,6 +434,7 @@ export class Viewer {
     const list = pages.map((page) => `- [[${page.path.replace(/\.md$/, "")}]]`).join("\n");
     const body = pages.length > 0 ? `Pages, newest first:\n\n${list}` : "The notebook is empty. Pages appear here as they are written.";
     this.document = parseDocument(`# Notebook\n\nThere is no ${indexPage} yet.\n\n${body}`);
+    this.search = undefined;
     this.shown = undefined;
     this.renderBlocks(undefined);
     this.scrollTo({ top: 0 });
@@ -599,6 +616,7 @@ export class Viewer {
       this.renderer.requestRender();
     }
     this.settleHints();
+    this.keepSearchFresh();
     this.renderTitle();
     if (this.mindMapView.step()) this.renderer.requestRender();
     if (this.message && Date.now() > this.message.until) {
@@ -637,71 +655,286 @@ export class Viewer {
 
   private readonly onKey = (key: KeyEvent): void => {
     if (this.editing) return;
-    if (this.picker) {
-      const outcome = pickerKey(this.picker.state, key);
-      if (outcome.done) {
-        this.picker = undefined;
-        this.pickerView.render(undefined);
-        outcome.value?.();
-      } else {
-        this.pickerView.render(this.picker.state);
-      }
-      this.renderer.requestRender();
-      return;
-    }
-    if (this.commenting) {
-      this.commentKey(key);
-      this.renderer.requestRender();
-      return;
-    }
-    if (this.mindMap) {
-      if (key.name === "tab") this.focusMap(!this.mapFocused);
-      else if (this.mapFocused || key.name === "escape" || key.name === "a" || key.name === "q" || (key.ctrl && key.name === "c")) this.mindMapKey(key);
-      else this.scrollKey(key);
-      this.renderStatus();
-      this.renderer.requestRender();
-      return;
-    }
-    if (key.name === "q" || (key.ctrl && key.name === "c")) this.close();
-    else if (this.scrollKey(key)) return this.renderer.requestRender();
-    else if (key.name === "h" && key.shift) this.travel(() => this.history.back());
-    else if (key.name === "l" && key.shift) this.travel(() => this.history.forward());
-    else if (key.name === "f") this.openPicker("Links", this.linkItems());
-    else if (key.name === "p" && key.shift) void this.sync();
-    else if (key.name === "x" && key.shift) void this.abortMerge();
-    else if (key.name === "n") this.nextConflict(key.shift ? -1 : 1);
-    else if (key.name === "1" && this.conflicts().length > 0) this.settleConflict("ours");
-    else if (key.name === "2" && this.conflicts().length > 0) this.settleConflict("theirs");
-    else if (key.name === "b" && this.conflicts().length > 0) this.settleConflict("both");
-    else if (key.name === "p") this.openPicker("Pages", this.pageItems());
-    else if (key.name === "o") this.openPicker("Outline", this.outlineItems());
-    else if (key.name === "t") this.openPicker("Tags", this.tagItems());
-    else if (key.name === "i") this.navigate(existsSync(join(this.options.root, indexPage)) ? indexPage : undefined);
-    else if (key.name === "a") this.openMindMap();
-    else if (key.name === "w") this.toggleFollow();
-    else if (key.name === "e") void this.edit();
-    else if (key.name === "r") this.reload();
-    else return;
+    const binding = bindingFor(this.bindings(), key);
+    if (binding?.run) binding.run();
+    else this.unbound(key);
+    this.renderStatus();
     this.renderer.requestRender();
   };
 
-  private scrollKey(key: KeyEvent): boolean {
-    const half = Math.max(Math.floor(this.scroll.height / 2), 1);
-    const scrollBy = (delta: number) => {
-      this.scroll.scrollBy(delta);
-      this.stopFollowing();
-      this.lookedAt();
-    };
-    if (key.name === "j" || key.name === "down") scrollBy(1);
-    else if (key.name === "k" || key.name === "up") scrollBy(-1);
-    else if (key.name === "d" || (key.ctrl && key.name === "d")) scrollBy(half);
-    else if (key.name === "u" || (key.ctrl && key.name === "u")) scrollBy(-half);
-    else if (key.name === "space" || key.name === "pagedown") scrollBy(this.scroll.height - 1);
-    else if (key.name === "pageup") scrollBy(1 - this.scroll.height);
-    else if (key.name === "home" || (key.name === "g" && !key.shift)) scrollBy(-this.scroll.scrollTop);
-    else if (key.name === "end" || (key.name === "g" && key.shift)) scrollBy(this.scroll.scrollHeight);
-    else return false;
-    return true;
+  keys(): AppKeys {
+    return { app: "quoll", groups: this.editing ? [] : keyGroups(this.bindings()) };
+  }
+
+  private bindings(): Binding<() => void>[] {
+    if (this.editing) return [];
+    const picker = this.picker;
+    if (picker) return pickerBindings.map((binding) => ({ ...binding, run: binding.run && (() => this.pickerDone(binding.run!(picker.state))) }));
+    if (this.commenting) return this.attachBindings();
+    if (this.helpView.open) return this.helpBindings();
+    if (this.menu) return this.menuBindings(this.menu);
+    if (this.search?.typing) return this.searchPromptBindings();
+    const map = this.mindMap;
+    if (map) {
+      const wrap = (bindings: Binding<(state: NotebookMapState) => NotebookMapOutcome>[]): Binding<() => void>[] =>
+        bindings.map((binding) => ({ ...binding, run: binding.run && (() => this.mapOutcome(binding.run!(map))) }));
+      if (map.filter !== undefined) return wrap(atlasFilterBindings);
+      if (!this.mapFocused) return [...this.atlasPageBindings(), ...wrap(atlasBindings.filter((binding) => binding.on.includes("a") || binding.on.includes("escape"))), ...this.scrollBindings()];
+      return [...this.atlasViewBindings(), ...wrap(atlasBindings)];
+    }
+    return this.pageBindings();
+  }
+
+  private unbound(key: KeyEvent): void {
+    const text = !key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " " ? key.sequence : undefined;
+    if (this.picker) {
+      if (text) this.picker.state.type(text);
+      this.pickerView.render(this.picker.state);
+    } else if (this.commenting) {
+      if (key.name && !key.ctrl && this.commenting.hints.has(key.name)) this.comment(this.commenting.hints.get(key.name)!);
+    } else if (this.helpView.open) {
+      return;
+    } else if (this.menu) {
+      this.closeMenu();
+    } else if (this.search?.typing) {
+      if (text) this.typeSearch(this.search.query + text);
+    } else if (this.mindMap?.filter !== undefined && text) {
+      this.mindMap.typeFilter(text);
+      this.mapOutcome("move");
+    }
+  }
+
+  private pageBindings(): Binding<() => void>[] {
+    const conflicted = () => this.conflicts().length > 0;
+    const merging = () => this.gitStatus?.merging === true;
+    const searching = () => this.search !== undefined;
+    return [
+      { group: "Go", label: "find page", on: ["p"], menu: "f", run: () => this.openPicker("Pages", this.pageItems()) },
+      { group: "Go", label: "links", on: ["f"], menu: "l", run: () => this.openPicker("Links", this.linkItems()) },
+      { group: "Go", label: "outline", on: ["o"], menu: "o", run: () => this.openPicker("Outline", this.outlineItems()) },
+      { group: "Go", label: "tags", on: ["t"], menu: "t", run: () => this.openPicker("Tags", this.tagItems()) },
+      { group: "Go", label: "atlas", on: ["a"], menu: "a", run: () => this.openMindMap() },
+      { group: "Go", label: "index page", on: ["i"], menu: "i", run: () => this.navigate(existsSync(join(this.options.root, indexPage)) ? indexPage : undefined) },
+      { group: "Go", label: "back", on: ["H"], menu: "h", run: () => this.travel(() => this.history.back()) },
+      { group: "Go", label: "forward", on: ["L"], run: () => this.travel(() => this.history.forward()) },
+      { group: "Search", label: "search the page", on: ["/"], menu: "/", run: () => this.startSearch() },
+      { group: "Search", label: "next match", on: ["n"], when: searching, run: () => this.nextMatch(1) },
+      { group: "Search", label: "previous match", on: ["N"], when: searching, run: () => this.nextMatch(-1) },
+      { group: "Search", label: "clear the search", on: ["escape"], when: searching, run: () => this.clearSearch() },
+      { group: "Page", label: "edit", on: ["e"], menu: "e", run: () => void this.edit() },
+      { group: "Page", label: "reload", on: ["r"], menu: "r", run: () => this.reload() },
+      { group: "Page", label: this.following ? "stop following edits" : "follow edits", on: ["w"], menu: "w", run: () => this.toggleFollow() },
+      ...this.scrollBindings(),
+      { group: "Conflicts", label: "next conflict", on: ["n"], when: () => !searching() && (merging() || conflicted()), run: () => this.nextConflict(1) },
+      { group: "Conflicts", label: "previous conflict", on: ["N"], when: () => !searching() && (merging() || conflicted()), run: () => this.nextConflict(-1) },
+      { group: "Conflicts", label: "keep yours", on: ["1"], when: conflicted, run: () => this.settleConflict("ours") },
+      { group: "Conflicts", label: "keep theirs", on: ["2"], when: conflicted, run: () => this.settleConflict("theirs") },
+      { group: "Conflicts", label: "keep both", on: ["b"], when: conflicted, run: () => this.settleConflict("both") },
+      { group: "Conflicts", label: "abort the merge", on: ["X"], when: merging, run: () => void this.abortMerge() },
+      { group: "Notebook", label: merging() ? "finish the merge" : "sync", on: ["P"], menu: "P", when: () => this.options.git !== undefined, run: () => void this.sync() },
+      { group: "Notebook", label: "menu", on: [" "], run: () => this.openMenu() },
+      { group: "Notebook", label: "keys", on: [], menu: "?", run: () => this.openHelp() },
+      { group: "Notebook", label: "quit", on: ["q", "^c"], menu: "q", run: () => this.close() },
+    ];
+  }
+
+  private scrollBindings(): Binding<() => void>[] {
+    const half = () => Math.max(Math.floor(this.scroll.height / 2), 1);
+    const page = () => Math.max(this.scroll.height - 1, 1);
+    return [
+      { group: "Scroll", label: "down a line", on: ["j", "down"], run: () => this.scrollBy(1) },
+      { group: "Scroll", label: "up a line", on: ["k", "up"], run: () => this.scrollBy(-1) },
+      { group: "Scroll", label: "down a page", on: ["d", "pagedown"], run: () => this.scrollBy(page()) },
+      { group: "Scroll", label: "up a page", on: ["u", "pageup"], run: () => this.scrollBy(-page()) },
+      { group: "Scroll", label: "down half a page", on: ["^d"], run: () => this.scrollBy(half()) },
+      { group: "Scroll", label: "up half a page", on: ["^u"], run: () => this.scrollBy(-half()) },
+      { group: "Scroll", label: "top", on: ["g", "home"], run: () => this.scrollBy(-this.scroll.scrollTop) },
+      { group: "Scroll", label: "bottom", on: ["G", "end"], run: () => this.scrollBy(this.scroll.scrollHeight) },
+    ];
+  }
+
+  private scrollBy(delta: number): void {
+    this.scroll.scrollBy(delta);
+    this.stopFollowing();
+    this.lookedAt();
+  }
+
+  private atlasViewBindings(): Binding<() => void>[] {
+    return [
+      { group: "Atlas", label: "page or atlas", on: ["tab"], run: () => this.focusMap(!this.mapFocused) },
+      { group: "Atlas", label: "menu", on: [" "], run: () => this.openMenu() },
+      { group: "Atlas", label: "keys", on: [], menu: "?", run: () => this.openHelp() },
+    ];
+  }
+
+  private atlasPageBindings(): Binding<() => void>[] {
+    return [{ group: "Atlas", label: "page or atlas", on: ["tab"], run: () => this.focusMap(!this.mapFocused) }];
+  }
+
+  private attachBindings(): Binding<() => void>[] {
+    const commenting = this.commenting!;
+    const last = this.blockViews.length - 1;
+    return [
+      { group: "Attach", label: "attach a block", on: [], keys: "a–z" },
+      { group: "Attach", label: "next block", on: ["j", "down"], run: () => this.selectBlock(Math.min(commenting.selected + 1, last)) },
+      { group: "Attach", label: "previous block", on: ["k", "up"], run: () => this.selectBlock(Math.max(commenting.selected - 1, 0)) },
+      { group: "Attach", label: "attach the selected block", on: ["return"], run: () => this.comment(commenting.selected) },
+      { group: "Attach", label: "cancel", on: ["escape", "q", "^c"], run: () => this.cancelCommenting() },
+    ];
+  }
+
+  private helpBindings(): Binding<() => void>[] {
+    return [
+      { group: "Keys", label: "scroll down", on: ["j", "down"], run: () => this.helpView.scroll(1) },
+      { group: "Keys", label: "scroll up", on: ["k", "up"], run: () => this.helpView.scroll(-1) },
+      { group: "Keys", label: "close", on: ["escape", "q", "?", "^c"], run: () => this.helpView.render("", undefined) },
+    ];
+  }
+
+  private menuBindings(entries: Binding<() => void>[]): Binding<() => void>[] {
+    return [
+      ...entries.map((entry) => ({ group: entry.group, label: entry.label, on: [entry.menu!], run: () => (this.closeMenu(), entry.run!()) })),
+      { group: "Menu", label: "close", on: ["escape", " ", "^c"], run: () => this.closeMenu() },
+    ];
+  }
+
+  private searchPromptBindings(): Binding<() => void>[] {
+    return [
+      { group: "Search", label: "search for", on: [], keys: "type" },
+      { group: "Search", label: "erase", on: ["backspace"], run: () => (this.search!.query === "" ? this.clearSearch() : this.typeSearch(this.search!.query.slice(0, -1))) },
+      { group: "Search", label: "keep the matches", on: ["return"], run: () => this.acceptSearch() },
+      { group: "Search", label: "cancel", on: ["escape", "^c"], run: () => this.clearSearch() },
+    ];
+  }
+
+  private pickerDone(outcome: PickerOutcome<() => void>): void {
+    if (!outcome.done) {
+      this.pickerView.render(this.picker?.state);
+      return;
+    }
+    this.picker = undefined;
+    this.pickerView.render(undefined);
+    outcome.value?.();
+  }
+
+  private openMenu(): void {
+    this.menu = active(this.bindings()).filter((binding) => binding.menu !== undefined && binding.run !== undefined);
+    const groups: MenuGroup[] = [];
+    for (const entry of this.menu) {
+      const group = groups.find((candidate) => candidate.name === entry.group) ?? groups[groups.push({ name: entry.group, items: [] }) - 1]!;
+      group.items.push([entry.menu!, entry.label]);
+    }
+    this.menuView.render(this.mindMap ? "quoll · atlas" : "quoll", groups);
+  }
+
+  private closeMenu(): void {
+    this.menu = undefined;
+    this.menuView.render("", undefined);
+  }
+
+  private startSearch(): void {
+    this.clearSearch();
+    this.search = { query: "", typing: true, current: 0, matches: [], targets: [], texts: "", from: this.scroll.scrollTop };
+  }
+
+  private typeSearch(query: string): void {
+    const search = this.search!;
+    search.query = query;
+    this.refreshSearch();
+    const first = search.matches.findIndex((match) => this.matchTop(match) >= search.from);
+    search.current = first === -1 ? 0 : first;
+    this.paintSearch();
+    if (search.matches.length > 0) this.showMatch();
+    else this.scrollTo({ top: search.from });
+  }
+
+  private acceptSearch(): void {
+    const search = this.search!;
+    if (search.query === "") return this.clearSearch();
+    search.typing = false;
+  }
+
+  private nextMatch(delta: number): void {
+    const search = this.search!;
+    const count = search.matches.length;
+    if (count === 0) return this.flash(`No matches for ${search.query}`);
+    search.current = (search.current + delta + count) % count;
+    this.paintSearch();
+    this.showMatch();
+  }
+
+  private clearSearch(): void {
+    if (!this.search) return;
+    this.search = undefined;
+    this.paintSearch();
+  }
+
+  private refreshSearch(): void {
+    const search = this.search!;
+    const targets = searchTargets(this.blockViews);
+    search.targets = targets;
+    search.texts = targets.map(searchText).join("\0");
+    search.matches = targets.flatMap((target) => matchesIn(target, search.query));
+    search.current = Math.min(search.current, Math.max(search.matches.length - 1, 0));
+  }
+
+  private keepSearchFresh(): void {
+    const search = this.search;
+    if (!search || search.query === "") return;
+    const targets = searchTargets(this.blockViews);
+    const same = targets.length === search.targets.length && targets.every((target, index) => target === search.targets[index]);
+    if (same && targets.map(searchText).join("\0") === search.texts) return;
+    this.refreshSearch();
+    this.paintSearch();
+    this.renderStatus();
+  }
+
+  private paintSearch(): void {
+    const search = this.search;
+    const current = search?.matches[search.current];
+    for (const target of searchTargets(this.blockViews)) {
+      const query = search?.query ?? "";
+      const ordinal = current?.target === target ? current.ordinal : undefined;
+      const key = query === "" ? "" : `${query}\0${ordinal ?? ""}`;
+      if ((this.painted.get(target) ?? "") === key) continue;
+      this.painted.set(target, key);
+      if (target instanceof CodeRenderable) {
+        target.onChunks = key === "" ? undefined : (chunks) => markMatches(chunks, query, ordinal);
+        continue;
+      }
+      const original = this.tableSources.get(target) ?? target.content;
+      this.tableSources.set(target, original);
+      let seen = 0;
+      const mark = (cell: TextChunk[]) => {
+        const at = seen;
+        seen += findMatches(cell.map((chunk) => chunk.text).join(""), query).length;
+        return markMatches(cell, query, ordinal === undefined ? undefined : ordinal - at);
+      };
+      target.content = key === "" ? original : original.map((row) => row.map((cell) => cell && mark(cell)));
+    }
+  }
+
+  private matchTop(match: SearchMatch): number {
+    return match.target.y - this.scroll.content.y + match.row;
+  }
+
+  private showMatch(): void {
+    const search = this.search!;
+    const match = search.matches[search.current];
+    if (!match) return;
+    this.stopFollowing();
+    const top = this.matchTop(match);
+    if (top >= this.scroll.scrollTop && top < this.scroll.scrollTop + this.scroll.height) return;
+    this.scrollTo({ top: Math.max(top - Math.floor(this.scroll.height / 3), 0) });
+  }
+
+  private openHelp(): void {
+    const here = keyGroups(this.bindings());
+    const also = this.mindMap ? keyGroups([...atlasFilterBindings, ...this.scrollBindings()]) : keyGroups([...this.searchPromptBindings(), ...pickerBindings]);
+    const renamed: Record<string, string> = { Search: "Search prompt", Scroll: "Page, after Tab" };
+    const extra = also.map((group) => ({ ...group, name: renamed[group.name] ?? group.name })).filter((group) => !here.some((shown) => shown.name === group.name));
+    const where = this.mindMap ? "atlas" : this.gitStatus?.merging ? "merge" : "page";
+    this.helpView.render(`Keys · ${where}`, [...here, ...extra]);
   }
 
   private openMindMap(): void {
@@ -721,6 +954,7 @@ export class Viewer {
     this.mapFocused = true;
     this.mindMapView.focus(true);
     this.mindMap.selectPage(page, line);
+    this.mapNode = this.mindMap.choice.node;
     this.mindMapView.render(this.mindMap);
     this.highlightMapLine();
     this.renderStatus();
@@ -734,12 +968,11 @@ export class Viewer {
     this.renderStatus();
   }
 
-  private mindMapKey(key: KeyEvent): void {
-    const before = this.mindMap!.choice.node;
-    const outcome = notebookMapKey(this.mindMap!, key);
+  private mapOutcome(outcome: NotebookMapOutcome): void {
     if (outcome === "move") {
       this.mindMapView.render(this.mindMap);
-      if (this.mindMap!.choice.node !== before) this.followMap();
+      if (this.mindMap!.choice.node !== this.mapNode) this.followMap();
+      this.mapNode = this.mindMap?.choice.node;
       this.renderStatus();
     } else if (outcome === "land") {
       this.land();
@@ -992,6 +1225,8 @@ export class Viewer {
   }
 
   private startCommenting(): void {
+    this.closeMenu();
+    this.helpView.render("", undefined);
     this.stopFollowing();
     this.commenting = { selected: this.visibleBlocks()[0] ?? 0, hints: new Map(), top: undefined, settleFrames: 3 };
     this.renderHints();
@@ -1018,16 +1253,6 @@ export class Viewer {
     commenting.top = this.scroll.scrollTop;
     this.renderHints();
     this.renderer.requestRender();
-  }
-
-  private commentKey(key: KeyEvent): void {
-    const commenting = this.commenting!;
-    const last = this.blockViews.length - 1;
-    if (key.name === "escape" || key.name === "q" || (key.ctrl && key.name === "c")) this.cancelCommenting();
-    else if (key.name === "j" || key.name === "down") this.selectBlock(Math.min(commenting.selected + 1, last));
-    else if (key.name === "k" || key.name === "up") this.selectBlock(Math.max(commenting.selected - 1, 0));
-    else if (key.name === "return") this.comment(commenting.selected);
-    else if (key.name && !key.ctrl && commenting.hints.has(key.name)) this.comment(commenting.hints.get(key.name)!);
   }
 
   private selectBlock(index: number): void {
@@ -1119,12 +1344,21 @@ export class Viewer {
         ? fg(theme.quoll)(`  ${git.ahead > 0 ? `↑${git.ahead}` : ""}${git.behind > 0 ? `${git.ahead > 0 ? " " : ""}↓${git.behind}` : ""} P sync`)
         : "";
     const follow = this.following ? [fg(theme.quoll)("  ◉ following edits")] : [];
-    const left: Part[] = [pill(this.mode()), " ", fg(theme.text)(page), fg(theme.muted)(tags), ahead, ...follow];
+    const left: Part[] = [pill(this.mode()), " ", fg(theme.text)(page), fg(theme.muted)(tags), ahead, ...follow, ...this.searchParts()];
     const room = this.renderer.width - partsWidth(left) - 3;
     const right = this.message ? [fg(theme.warning)(this.message.text)] : hintParts(fitHints(this.hints(), room), "  ");
     const gap = Math.max(this.renderer.width - partsWidth(left) - partsWidth(right) - 1, 2);
     this.status.content = styled([...left, " ".repeat(gap), ...right, " "]);
     this.renderTitle();
+  }
+
+  private searchParts(): Part[] {
+    const search = this.search;
+    if (!search) return [];
+    const count = search.matches.length;
+    const found = search.query === "" ? [] : count === 0 ? [fg(theme.warning)("  no matches")] : [fg(theme.muted)(`  ${search.current + 1}/${count}`)];
+    if (search.typing) return ["  ", bold(fg(theme.quoll)("/")), fg(theme.text)(search.query), bg(theme.text)(" "), ...found];
+    return ["  ", fg(theme.quoll)(`/${search.query}`), ...found];
   }
 
   private mode(): string {
@@ -1135,6 +1369,11 @@ export class Viewer {
   }
 
   private hints(): Hint[] {
+    if (this.search?.typing)
+      return [
+        ["Enter", "keep"],
+        ["Esc", "cancel"],
+      ];
     if (this.commenting)
       return [
         ["a–z", "attach"],
@@ -1162,6 +1401,7 @@ export class Viewer {
         ["Enter", `⤳ ${door.to}`],
         ["⌫", "back"],
         ["Tab", "page"],
+        ["␣?", "keys"],
         ["v", "view"],
       ];
     if (this.mindMap)
@@ -1169,19 +1409,28 @@ export class Viewer {
         ["hjkl", "move"],
         ["⌫", "back"],
         ["Tab", "page"],
+        ["␣?", "keys"],
         ["v", "view"],
         ["a", "land"],
         ["Esc", "exit"],
       ];
+    const search: Hint[] = this.search
+      ? [
+          ["n/N", "next/prev"],
+          ["Esc", "clear"],
+        ]
+      : [];
     return [
-      ["f", "links"],
+      ...search,
+      ["␣", "menu"],
+      ["␣?", "keys"],
       ["p", "pages"],
-      ["t", "tags"],
+      ["f", "links"],
+      ["/", "search"],
       ["o", "outline"],
       ["a", "atlas"],
       ["e", "edit"],
       ["w", "follow"],
-      ["H/L", "back/fwd"],
       ["q", "quit"],
     ];
   }
@@ -1200,6 +1449,42 @@ export class Viewer {
       return false;
     }
   }
+}
+
+function searchTargets(views: Renderable[]): Searchable[] {
+  const found: Searchable[] = [];
+  const visit = (view: Renderable) => {
+    if (view instanceof CodeRenderable || view instanceof TextTableRenderable) found.push(view);
+    else for (const child of view.getChildren()) visit(child as Renderable);
+  };
+  views.forEach(visit);
+  return found;
+}
+
+function searchText(target: Searchable): string {
+  return target instanceof CodeRenderable ? target.plainText : tableCells(target).join("\t");
+}
+
+function tableCells(target: TextTableRenderable): string[] {
+  return target.content.flatMap((row) => row.map((cell) => (cell ?? []).map((chunk) => chunk.text).join("")));
+}
+
+function matchesIn(target: Searchable, query: string): SearchMatch[] {
+  if (target instanceof CodeRenderable) {
+    const text = target.plainText;
+    const width = Math.max(target.width, 1);
+    return findMatches(text, query).map((range, ordinal) => {
+      const lines = text.slice(0, range.start).split("\n");
+      const row = lines.length - 1 + Math.floor(Bun.stringWidth(lines.at(-1)!) / width);
+      return { target, ordinal, row };
+    });
+  }
+  let ordinal = 0;
+  return target.content.flatMap((row, index) =>
+    row.flatMap((cell) =>
+      findMatches((cell ?? []).map((chunk) => chunk.text).join(""), query).map((range) => ({ target, ordinal: ordinal++, row: index + 1 + (index > 0 ? 1 : 0) })),
+    ),
+  );
 }
 
 function deleteCommand(id: number): string {

@@ -635,4 +635,105 @@ describe("viewer", () => {
       expect(replies).toEqual([{ none: "No page open in quoll" }]);
     });
   });
+
+  test("runs a menu entry by its letter after space, and pages down with d instead", async () => {
+    writeFileSync(join(root, "index.md"), longPlan);
+    const { setup } = await open(false);
+    setup.mockInput.pressKey(" ");
+    let frame = await settle(setup);
+    expect(frame).toContain("f  find page");
+    expect(frame).toContain("intro");
+    setup.mockInput.pressKey("f");
+    frame = await settle(setup);
+    expect(frame).not.toContain("find page");
+    expect(frame).toContain("Pages");
+    setup.mockInput.pressEscape();
+    await settle(setup);
+    setup.mockInput.pressKey("d");
+    frame = await settle(setup);
+    expect(frame).not.toContain("intro");
+    expect(frame).toContain("filler 12");
+  });
+
+  test("lists every key for the page on space ?, from the same table komux is told", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\nBody.");
+    setup = await createTestRenderer({ width: 120, height: 40 });
+    const viewer = new Viewer(setup.renderer, { root, follow: false, images: () => ({ enabled: false, write: () => {} }), edit: async () => {} });
+    viewer.start();
+    await settle(setup);
+    setup.mockInput.pressKey(" ");
+    setup.mockInput.pressKey("?");
+    const frame = await settle(setup);
+    expect(frame).toContain("Keys · page");
+    expect(frame).toContain("p ␣f");
+    expect(frame).toContain("find page");
+    expect(frame).toContain("Pickers");
+    const groups = viewer.keys().groups;
+    expect(groups.map((group) => group.name)).toEqual(["Keys"]);
+    expect(groups[0]!.commands.find((command) => command.label === "close")).toEqual({ label: "close", keys: "Esc q ? ^c", send: "\x1b" });
+    setup.mockInput.pressEscape();
+    await settle(setup);
+    expect(setup.captureCharFrame()).not.toContain("Keys · page");
+  });
+
+  test("tells komux the keys that work in the page, a picker, and the atlas", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\nBody.");
+    const { setup, viewer } = await open(false);
+    const page = viewer.keys();
+    expect(page.app).toBe("quoll");
+    const names = page.groups.map((group) => group.name);
+    expect(names).toEqual(["Go", "Search", "Page", "Scroll", "Notebook"]);
+    const all = page.groups.flatMap((group) => group.commands);
+    expect(all.find((command) => command.label === "find page")).toEqual({ label: "find page", keys: "p ␣f", send: "p" });
+    expect(all.find((command) => command.label === "keys")).toEqual({ label: "keys", keys: "␣?", send: " ?" });
+    expect(all.find((command) => command.label === "down half a page")).toEqual({ label: "down half a page", keys: "^d", send: "\x04" });
+    expect(all.some((command) => command.label === "next match" || command.label === "keep yours")).toBe(false);
+    setup.mockInput.pressKey("p");
+    await settle(setup);
+    expect(viewer.keys().groups.map((group) => group.name)).toEqual(["Pickers"]);
+    expect(viewer.keys().groups[0]!.commands[0]).toEqual({ label: "filter", keys: "type" });
+    setup.mockInput.pressEscape();
+    await settle(setup);
+    setup.mockInput.pressKey("a");
+    await settle(setup);
+    const atlas = viewer.keys().groups.flatMap((group) => group.commands.map((command) => command.label));
+    expect(atlas).toContain("land on the page");
+    expect(atlas).not.toContain("find page");
+  });
+
+  test("searches the page with /, lights every match, and steps through them with n and N", async () => {
+    writeFileSync(join(root, "index.md"), ["# Index", "", "A coupon here.", "", ...Array.from({ length: 30 }, (_, index) => `filler ${index}`), "", "Another coupon there.", "", "| Col | Note |", "| --- | --- |", "| x | a coupon cell |"].join("\n"));
+    const { setup, viewer } = await open(false);
+    for (const ch of "/coupon") setup.mockInput.pressKey(ch);
+    let frame = await settle(setup);
+    expect(frame).toMatch(/\/coupon .*1\/3/);
+    const lit = (color: string) =>
+      setup
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
+        .filter((span) => span.bg.equals(RGBA.fromHex(color)))
+        .map((span) => span.text);
+    expect(lit(theme.match)).toEqual(["coupon"]);
+    setup.mockInput.pressEnter();
+    setup.mockInput.pressKey("n");
+    frame = await settle(setup);
+    expect(frame).toContain("2/3");
+    expect(frame).toContain("Another coupon there.");
+    expect(frame).not.toContain("A coupon here.");
+    setup.mockInput.pressKey("n");
+    frame = await settle(setup);
+    expect(frame).toContain("3/3");
+    expect(lit(theme.match)).toEqual(["coupon"]);
+    expect(lit(theme.selection)).toContain("coupon");
+    setup.mockInput.pressKey("N", { shift: true });
+    setup.mockInput.pressKey("N", { shift: true });
+    frame = await settle(setup);
+    expect(frame).toContain("A coupon here.");
+    expect(viewer.keys().groups.find((group) => group.name === "Search")!.commands.map((command) => command.label)).toContain("next match");
+    setup.mockInput.pressEscape();
+    frame = await settle(setup);
+    expect(frame).not.toContain("1/3");
+    expect(lit(theme.match)).toEqual([]);
+    expect(lit(theme.selection)).toEqual([]);
+  });
 });

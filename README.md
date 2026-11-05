@@ -23,7 +23,13 @@ Set `QUOLL_DIR` to the notebook root, which holds a folder per notebook. `quoll`
 
 Inside komux, `quoll show`, `quoll path`, `quoll watch` and `quoll tags` use the notebook the quoll in the same tab is showing, so they work from anywhere in the tab.
 
-Keys: `j`/`k`, `d`/`u`, `g`/`G` scroll · `f` links · `p` pages · `t` tags · `o` outline · `a` atlas · `i` index · `H`/`L` back and forward · `e` edit in `$VISUAL` or `$EDITOR` (helix if neither is set) · `w` follow · `P` sync the notebook (pull, merge, push; shown as `↑n ↓n`) · in a merge: `n` next conflict, `1`/`2`/`b` keep yours/theirs/both, `X` abort · `r` reload · `q` quit.
+Keys: `␣` opens a menu of the main actions, each run by one letter: `f` find a page, `l` links, `o` outline, `t` tags, `a` atlas, `i` index, `h` back, `/` search, `e` edit, `r` reload, `w` follow, `P` sync, `?` every key, `q` quit. `␣ ?` lists every key that works where you are, in the page, the atlas or a merge.
+
+The direct keys still work: `j`/`k` scroll a line, `d`/`u` or PgDn/PgUp a page, `^d`/`^u` half a page, `g`/`G` to the top or bottom · `p` pages · `f` links · `t` tags · `o` outline · `a` atlas · `i` index · `H`/`L` back and forward · `e` edit in `$VISUAL` or `$EDITOR` (helix if neither is set) · `w` follow · `P` sync the notebook (pull, merge, push; shown as `↑n ↓n`) · in a merge: `n`/`N` next or previous conflict, `1`/`2`/`b` keep yours/theirs/both, `X` abort · `r` reload · `q` quit.
+
+`/` searches the page: type in the status line, and every match lights up as you type, the current one brighter. Enter keeps the matches, `n`/`N` step through them (instead of through conflicts while a search is on), and Esc clears them. In the atlas, `/` filters the notebook's pages and headings instead.
+
+Inside komux, quoll tells komux which of these keys work in its current state, so komux's palette can list and run them.
 
 Inside komux, **Alt+shift+c** on quoll attaches a block of the page to a message for the tab's Claude: pick one by its hint letter, by moving with `j`/`k` and pressing Enter, or by clicking it, and komux's message box opens with the block's file, line numbers, heading path and source attached. quoll listens for komux on a socket in the tab's folder while it runs.
 
