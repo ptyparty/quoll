@@ -74,9 +74,9 @@ describe("parseDocument", () => {
   test("collects wiki and markdown links and shows wiki links by label", () => {
     const doc = parseDocument("See [[plan#Rollout|the rollout]] and [notes](notes.md) or ![[other page]].");
     expect(doc.links).toEqual([
-      { label: "the rollout", target: "plan#Rollout", line: 0, lead: false },
-      { label: "other page", target: "other page", line: 0, lead: false },
-      { label: "notes", target: "notes.md", line: 0, lead: false },
+      { label: "the rollout", target: "plan#Rollout", line: 0, column: 4, length: 28, lead: false },
+      { label: "other page", target: "other page", line: 0, column: 58, length: 15, lead: false },
+      { label: "notes", target: "notes.md", line: 0, column: 37, length: 17, lead: false },
     ]);
     const block = doc.blocks[0]!;
     expect(block.kind === "markdown" && block.text).toBe("See **the rollout** and [notes](notes.md) or ↪ **other page**.");
@@ -85,6 +85,18 @@ describe("parseDocument", () => {
   test("marks a link that opens a list item, as an index's entries do", () => {
     const doc = parseDocument("- [Plan](plan.md): the work queue, see [notes](notes.md)\n1. [[decisions]]");
     expect(doc.links.map((link) => `${link.label} ${link.lead}`)).toEqual(["Plan true", "notes false", "decisions true"]);
+  });
+
+  test("marks a link that fills a table cell on its own, as a table of pages lists them", () => {
+    const doc = parseDocument("| Area | Page |\n|---|---|\n| Pairing, see [notes](notes.md) | [ideas/pairing](ideas/pairing.md) |\n| Tours | [[tours]] |");
+    expect(doc.links.map((link) => `${link.label} ${link.lead}`)).toEqual(["notes false", "ideas/pairing true", "tours true"]);
+  });
+
+  test("strikes through a marked link's label so the viewer can light it", () => {
+    const doc = parseDocument("# T\n\nSee [[plan|the plan]] and [notes](notes.md).", { line: 2, column: 4, length: 17 });
+    const block = doc.blocks.find((candidate) => candidate.startLine === 2)!;
+    expect(block.kind === "markdown" && block.text).toBe("See ~~the plan~~ and [notes](notes.md).");
+    expect(doc.links.map((link) => link.column)).toEqual([4, 26]);
   });
 
   test("turns a mermaid fence into a diagram block and leaves other fences as markdown", () => {

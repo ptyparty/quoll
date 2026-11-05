@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { RGBA } from "@opentui/core";
 import { MouseButtons, createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MermaidRenderer } from "../render/mermaid.ts";
+import { theme } from "../render/theme.ts";
 import { tinyPng } from "../render/test-images.ts";
 import { Viewer, type ViewerOptions } from "./viewer.ts";
 import { ContextRequest } from "../context.ts";
@@ -111,15 +113,22 @@ describe("viewer", () => {
   });
 
   test("walks the notebook's tree in the map, scrolls the page with Tab, and lands or exits", async () => {
-    writeFileSync(join(root, "index.md"), "# Index\n\n## Design\n\nSee [[plan|the plan]].");
+    writeFileSync(join(root, "index.md"), "# Index\n\n## Design\n\n- [[plan|the plan]]");
     writeFileSync(join(root, "design", "plan.md"), longPlan);
     const { setup, viewer } = await open();
     setup.mockInput.pressKey("a");
     let frame = await settle(setup);
+    expect(frame).toMatch(/^ Index › top of page\s*$/m);
+    setup.mockInput.pressKey("j");
+    frame = await settle(setup);
     expect(frame).toContain("▤ Plan ›");
-    expect(frame).toContain("Rollout");
+    expect(frame).toContain("↑ top of page");
     expect(frame).toMatch(/^ Index › Plan\s*$/m);
     setup.mockInput.pressKey("l");
+    frame = await settle(setup);
+    expect(viewer.page).toBe("design/plan.md");
+    expect(frame).toMatch(/^ Index › Plan › top of page\s*$/m);
+    setup.mockInput.pressKey("j");
     frame = await settle(setup);
     expect(viewer.page).toBe("design/plan.md");
     expect(frame).toContain("ship it carefully");
@@ -137,8 +146,6 @@ describe("viewer", () => {
     expect((viewer as unknown as { mindMap?: unknown }).mindMap).toBeUndefined();
     setup.mockInput.pressKey("a");
     await settle(setup);
-    setup.mockInput.pressKey("l");
-    await settle(setup);
     for (const ch of "/roll") setup.mockInput.pressKey(ch);
     frame = await settle(setup);
     expect(frame).toMatch(/^ \/roll  1\/1  │ Index › Plan › Rollout/m);
@@ -148,7 +155,7 @@ describe("viewer", () => {
     frame = await settle(setup);
     expect(viewer.page).toBe("index.md");
     expect(frame).not.toContain("Rollout");
-    for (const name of ["a", "l", "a"]) setup.mockInput.pressKey(name);
+    for (const name of ["a", "j", "l", "j", "a"]) setup.mockInput.pressKey(name);
     frame = await settle(setup);
     expect(viewer.page).toBe("design/plan.md");
     expect(frame).not.toContain("Plan ›");
@@ -156,6 +163,37 @@ describe("viewer", () => {
     setup.mockInput.pressKey("H", { shift: true });
     await settle(setup);
     expect(viewer.page).toBe("index.md");
+  });
+
+  test("shows where a link was written while it is highlighted in the map, and its destination beside it", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n- [[plan]]\n- [[notes]]");
+    writeFileSync(join(root, "notes.md"), "# Notes\n\n## Ideas\n\nCompare with [[plan]].");
+    writeFileSync(join(root, "design", "plan.md"), longPlan);
+    const { setup, viewer } = await open();
+    for (const name of ["a", "j", "j", "l", "j", "l"]) setup.mockInput.pressKey(name);
+    const frame = await settle(setup);
+    expect(frame).toMatch(/^ Index › Notes › Ideas › Plan \(design\/plan\)\s*$/m);
+    expect(frame).toContain("⤳ Plan");
+    expect(viewer.page).toBe("notes.md");
+    expect(frame).toContain("Compare with plan.");
+  });
+
+  test("names a placed page by its title, lights the link that places it, and opens the page one step in", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n## Design\n\nRead [[plan|the plan]] first.");
+    writeFileSync(join(root, "design", "plan.md"), longPlan);
+    const { setup, viewer } = await open();
+    for (const name of ["a", "j"]) setup.mockInput.pressKey(name);
+    let frame = await settle(setup);
+    expect(frame).toMatch(/^ Index › Plan\s*$/m);
+    expect(viewer.page).toBe("index.md");
+    expect(frame).toContain("Read the plan first.");
+    const paragraph = setup.captureSpans().lines.find((line) => line.spans.map((span) => span.text).join("").includes("Read the plan"))!;
+    const lit = paragraph.spans.filter((span) => span.bg.equals(RGBA.fromHex(theme.selected)));
+    expect(lit.map((span) => span.text).join("")).toBe("the plan");
+    setup.mockInput.pressKey("l");
+    frame = await settle(setup);
+    expect(frame).toMatch(/^ Index › Plan › top of page\s*$/m);
+    expect(viewer.page).toBe("design/plan.md");
   });
 
   test("lists the notebook's tags and opens a page picked from one", async () => {
@@ -514,7 +552,7 @@ describe("viewer", () => {
       setup.mockInput.pressKey("s");
       frame = await settle(setup);
       expect(labels(replies)).toEqual(['index.md:3 · "intro line"']);
-      expect(frame).toMatch(/^ Plan › Rollout\s*$/m);
+      expect(frame).toMatch(/^ Plan › top of page\s*$/m);
       expect((viewer as unknown as { mapFocused: boolean }).mapFocused).toBe(true);
     });
 

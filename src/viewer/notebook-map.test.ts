@@ -4,7 +4,7 @@ import { parseDocument } from "../document.ts";
 import { NotebookMapState, buildNotebookTree, notebookMapKey } from "./notebook-map.ts";
 
 const notebook = [
-  { page: "index.md", source: "# Home\n\n## Tools\n\n[[a]] and [[b]]\n\n## Notes\n\n[[c#Part]]\n\n## Docs\n\n[[d]]", tags: ["hub"] },
+  { page: "index.md", source: "# Home\n\n## Tools\n\n- [[a]]\n- [[b]]\n\n## Notes\n\n[[c#Part]]\n\n## Docs\n\n- [[d]]", tags: ["hub"] },
   { page: "a.md", source: "# A\n\n## Part one\n\nSee [[b]].", tags: ["tool"] },
   { page: "b.md", source: "# B\n\n## Bits", tags: ["tool"] },
   { page: "c.md", source: "# C\n\n## Part\n\nBack to [[a]].", tags: [] },
@@ -32,11 +32,11 @@ describe("notebook map", () => {
   test("hangs every page in one tree, at the first place a walk from the index reaches it", () => {
     const { root, pages } = tree();
     expect(root.label).toBe("Home");
-    expect(root.children.map((child) => child.label)).toEqual(["Tools", "Notes", "D", "C", "unlinked pages (1)"]);
-    expect(root.children[0]!.children.map((child) => `${child.kind} ${child.label}`)).toEqual(["page A", "page B"]);
-    expect(root.children[1]!.children.map((child) => `${child.kind} ${child.label} (${child.detail})`)).toEqual(["portal C › Part (c#Part)"]);
-    expect(pages.get("a.md")!.children[0]!.children.map((child) => `${child.kind} ${child.label} (${child.detail})`)).toEqual(["portal B (b)"]);
-    expect(pages.get("c.md")!.children.map((child) => child.label)).toEqual(["Part"]);
+    expect(root.children.map((child) => child.label)).toEqual(["top of page", "Tools", "Notes", "D", "C", "unlinked pages (1)"]);
+    expect(root.children[1]!.children.map((child) => `${child.kind} ${child.label}`)).toEqual(["page A", "page B"]);
+    expect(root.children[2]!.children.map((child) => `${child.kind} ${child.label} (${child.detail})`)).toEqual(["portal C › Part (c#Part)"]);
+    expect(pages.get("a.md")!.children[1]!.children.map((child) => `${child.kind} ${child.label} (${child.detail})`)).toEqual(["portal B (b)"]);
+    expect(pages.get("c.md")!.children.map((child) => child.label)).toEqual(["top of page", "Part"]);
   });
 
   test("hangs a page under the list that catalogues it rather than under a passing mention", () => {
@@ -47,7 +47,7 @@ describe("notebook map", () => {
     ].map(({ page, source, tags }) => ({ page, document: parseDocument(source), tags }));
     const { pages: placed, parents } = buildNotebookTree(pages, (_from, target) => ({ page: target.endsWith(".md") ? target : `${target}.md` }), "index.md");
     expect(parents.get(placed.get("drawer.md")!)?.label).toBe("Hub");
-    expect(placed.get("index.md")!.children[0]!.children.map((node) => node.kind)).toEqual(["portal"]);
+    expect(placed.get("index.md")!.children[1]!.children.map((node) => node.kind)).toEqual(["portal"]);
   });
 
   test("puts a page in the same place whichever page the map is opened on", () => {
@@ -77,7 +77,7 @@ describe("notebook map", () => {
 
   test("warps to the heading a portal names", () => {
     const state = new NotebookMapState(tree());
-    state.selectPage("index.md", 6);
+    state.selectPage("index.md", 7);
     notebookMapKey(state, key("l"));
     notebookMapKey(state, key("return"));
     expect(labels(state)).toEqual(["Home", "C", "Part"]);
@@ -86,7 +86,7 @@ describe("notebook map", () => {
   test("lists the other pages that share a tag under it, each a portal to that page", () => {
     const state = new NotebookMapState(tree());
     state.selectPage("a.md", 0);
-    for (const name of ["l", "j", "j"]) notebookMapKey(state, key(name));
+    for (const name of ["l", "j", "j", "j"]) notebookMapKey(state, key(name));
     expect(state.node.label).toBe("#tool (2)");
     expect(state.columns(10)[2]!.items.map((node) => node.label)).toEqual(["B", "Orphan"]);
     notebookMapKey(state, key("l"));
@@ -99,11 +99,11 @@ describe("notebook map", () => {
 
   test("opens on the root's sections, never on the root itself", () => {
     const state = new NotebookMapState(tree());
-    expect(labels(state)).toEqual(["Home", "Tools"]);
+    expect(labels(state)).toEqual(["Home", "top of page"]);
     notebookMapKey(state, key("h"));
-    expect(labels(state)).toEqual(["Home", "Tools"]);
+    expect(labels(state)).toEqual(["Home", "top of page"]);
     expect(state.columns(10)[0]!.items).toEqual([]);
-    expect(state.columns(10)[1]!.title).toBe("Home  1/5");
+    expect(state.columns(10)[1]!.title).toBe("Home  1/6");
   });
 
   test("shows the parent's list, the list you are in, and what lies under the selection", () => {
@@ -114,14 +114,16 @@ describe("notebook map", () => {
     expect(here!.title).toBe("Tools  1/2");
     expect(here!.items.map((node) => node.label)).toEqual(["A", "B"]);
     expect(here!.focus?.label).toBe("A");
-    expect(below!.items.map((node) => node.label)).toEqual(["Part one", "linked from (1)", "#tool (2)"]);
-    expect(state.tree.pages.get("a.md")!.children[1]!.children.map((node) => `${node.label} (${node.detail})`)).toEqual(["C › Part (c)"]);
+    expect(below!.items.map((node) => node.label)).toEqual(["top of page", "Part one", "linked from (1)", "#tool (2)"]);
+    expect(state.tree.pages.get("a.md")!.children[2]!.children.map((node) => `${node.label} (${node.detail})`)).toEqual(["C › Part (c)"]);
   });
 
-  test("folds a heading that only introduces a page into that page, and previews a leaf's text", () => {
+  test("folds a heading that only introduces a page into that page, and previews a leaf's text from its top", () => {
     const state = new NotebookMapState(tree());
     state.selectPage("d.md", 0);
     expect(labels(state)).toEqual(["Home", "D"]);
+    notebookMapKey(state, key("l"));
+    expect(labels(state)).toEqual(["Home", "D", "top of page"]);
     const below = state.columns(10)[2]!;
     expect(below.items.map((node) => `${node.kind} ${node.label}`)).toEqual(["text Some text about d."]);
   });
@@ -155,8 +157,7 @@ describe("notebook map", () => {
       return Object.fromEntries(state.map.placed.filter((item) => item.depth === 1).map((item) => [item.node.label, item.row - root.row]));
     };
     const before = spots();
-    notebookMapKey(state, key("l"));
-    notebookMapKey(state, key("l"));
+    for (const name of ["j", "l", "l", "j"]) notebookMapKey(state, key(name));
     expect(labels(state)).toEqual(["Home", "Tools", "A", "Part one"]);
     expect(spots()).toEqual(before);
     const placed = state.map.placed;
@@ -174,6 +175,7 @@ describe("notebook map", () => {
     const width = (label: string) => state.map.placed.find((item) => item.node.label === label)!.width;
     const section = "A section with a very long name indeed";
     expect(width(section)).toBe(32 + 2);
+    notebookMapKey(state, key("j"));
     notebookMapKey(state, key("l"));
     notebookMapKey(state, key("l"));
     expect(labels(state)).toEqual(["Home", section, "A subsection that is also long", "Leaf"]);
@@ -185,20 +187,22 @@ describe("notebook map", () => {
     const state = new NotebookMapState(tree());
     notebookMapKey(state, key("v"));
     state.selectPage("d.md", 0);
+    notebookMapKey(state, key("l"));
     expect(state.map.placed.filter((item) => item.node.kind === "text").map((item) => item.node.label)).toEqual(["Some text about d."]);
     notebookMapKey(state, key("l"));
-    expect(labels(state)).toEqual(["Home", "D"]);
+    expect(labels(state)).toEqual(["Home", "D", "top of page"]);
   });
 
   test("centres a branch on its parent, unless it is taller than the map, when its first child starts at the top of the map", () => {
     const source = ["# P", ...Array.from({ length: 6 }, (_, at) => `## H${at}`)].join("\n\n");
     const state = new NotebookMapState(buildNotebookTree([{ page: "index.md", document: parseDocument(`# Home\n\n- [P](p.md)`), tags: [] }, { page: "p.md", document: parseDocument(source), tags: [] }], (_from, target) => ({ page: target }), "index.md"));
     notebookMapKey(state, key("v"));
+    notebookMapKey(state, key("j"));
     const rows = () => state.map.placed.filter((item) => item.parent === state.selected).map((item) => item.row - state.choice.row);
-    expect(rows()).toEqual([-2, -1, 0, 1, 2, 3]);
+    expect(rows()).toEqual([-3, -2, -1, 0, 1, 2, 3]);
     state.viewRows = 2;
     state.selectPage("p.md", 0);
-    expect(rows()).toEqual([-1, 0, 1, 2, 3, 4]);
+    expect(rows()).toEqual([-1, 0, 1, 2, 3, 4, 5]);
   });
 
   test("prunes the map view to the matches and the paths to them while filtering", () => {
@@ -209,6 +213,41 @@ describe("notebook map", () => {
     expect(state.map.placed.map((item) => item.node.label).sort()).toEqual(["A", "C", "Home", "Part", "Part one", "Tools"]);
     notebookMapKey(state, key("return"));
     expect(state.map.placed.some((item) => item.node.label === "B")).toBe(true);
+  });
+
+  test("starts every page with its top, which previews the page's opening text", () => {
+    const state = new NotebookMapState(tree());
+    state.selectPage("index.md", 0);
+    expect(state.node.label).toBe("top of page");
+    expect(state.node.where).toEqual({ page: "index.md", line: 0 });
+    state.selectPage("a.md", 0);
+    notebookMapKey(state, key("l"));
+    expect(labels(state)).toEqual(["Home", "Tools", "A", "top of page"]);
+    expect(state.tree.pages.get("b.md")!.children.map((node) => node.kind)).toEqual(["top", "heading", "group", "tag"]);
+  });
+
+  test("remembers where on its page each link was written", () => {
+    const { pages } = tree();
+    const portal = pages.get("a.md")!.children[1]!.children[0]!;
+    expect(portal.kind).toBe("portal");
+    expect(portal.where).toEqual({ page: "b.md" });
+    expect(portal.source).toEqual({ page: "a.md", line: 4, column: 4, length: 5 });
+  });
+
+  test("names a page by its title where a link places it, and shows the link while it is selected", () => {
+    const pages = [
+      { page: "index.md", source: "# Home\n\n## Status\n\nThe [drawer](drawer.md) slides up.\n\n## Tools\n\n- [Hub](hub.md): the hub", tags: [] },
+      { page: "hub.md", source: "# Hub", tags: [] },
+      { page: "drawer.md", source: "# Drawer\n\n## Sizes", tags: [] },
+    ].map(({ page, source, tags }) => ({ page, document: parseDocument(source), tags }));
+    const state = new NotebookMapState(buildNotebookTree(pages, (_from, target) => ({ page: target }), "index.md"));
+    expect(state.tree.root.children.map((node) => `${node.kind} ${node.label}`)).toEqual(["top top of page", "page Drawer", "page Hub"]);
+    state.selectPage("drawer.md", 0);
+    expect(labels(state)).toEqual(["Home", "Drawer"]);
+    expect(state.node.source).toEqual({ page: "index.md", line: 4, column: 4, length: 19 });
+    expect(state.columns(10)[2]!.items.map((node) => node.label)).toEqual(["top of page", "Sizes"]);
+    notebookMapKey(state, key("l"));
+    expect(labels(state)).toEqual(["Home", "Drawer", "top of page"]);
   });
 
   test("lands with Enter on anything but a portal or tag, switches views with v, and exits with Esc", () => {

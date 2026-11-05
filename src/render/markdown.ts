@@ -15,7 +15,7 @@ export function sendImage(path: string, maxCols: number, maxRows: number, images
   return { id, box };
 }
 
-export function markdownStyle(renderer: CliRenderer): SyntaxStyle {
+export function markdownStyle(renderer: CliRenderer, marking = false): SyntaxStyle {
   return SyntaxStyle.fromStyles(
     {
       default: {},
@@ -29,7 +29,7 @@ export function markdownStyle(renderer: CliRenderer): SyntaxStyle {
       "markup.heading.6": { fg: theme.muted },
       "markup.strong": { bold: true },
       "markup.italic": { italic: true },
-      "markup.strikethrough": { dim: true },
+      "markup.strikethrough": marking ? { fg: theme.background, bg: theme.selected, bold: true } : { dim: true },
       "markup.raw": { fg: "#e6c384" },
       "markup.link": { fg: theme.accent, underline: true },
       "markup.link.label": { fg: theme.accent },

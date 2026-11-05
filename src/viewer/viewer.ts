@@ -51,6 +51,7 @@ export class Viewer {
   private readonly pickerView: PickerView;
   private readonly mindMapView: MindMapView;
   private readonly style: SyntaxStyle;
+  private readonly markingStyle: SyntaxStyle;
   private readonly history = new History();
   private readonly known = new Map<string, string>();
   private readonly changed = new Set<string>();
@@ -60,6 +61,8 @@ export class Viewer {
   private document: Document = { blocks: [], headings: [], links: [] };
   private pageViews: Renderable[] = [];
   private blockViews: BoxRenderable[] = [];
+  private markdownViews: (MarkdownRenderable | undefined)[] = [];
+  private marked: { view: MarkdownRenderable; text: string } | undefined;
   private gaps: TextRenderable[] = [];
   private gutters: TextRenderable[] = [];
   private commenting: Commenting | undefined;
@@ -94,6 +97,7 @@ export class Viewer {
   ) {
     this.following = options.follow;
     this.style = markdownStyle(renderer);
+    this.markingStyle = markdownStyle(renderer, true);
     const frame = new BoxRenderable(renderer, { flexDirection: "column", width: "100%", height: "100%", backgroundColor: theme.background });
     this.scroll = new ScrollBoxRenderable(renderer, {
       flexGrow: 1,
@@ -423,7 +427,10 @@ export class Viewer {
     this.commenting = undefined;
     this.asking?.cancel();
     this.asking = undefined;
-    const frames = this.document.blocks.map((block, index) => this.blockFrame(this.blockView(block, page, files), index));
+    const views = this.document.blocks.map((block) => this.blockView(block, page, files));
+    this.markdownViews = views.map((view) => (view instanceof MarkdownRenderable ? view : undefined));
+    this.marked = undefined;
+    const frames = views.map((view, index) => this.blockFrame(view, index));
     this.blockViews = frames.map(({ frame }) => frame);
     this.gutters = frames.map(({ gutter }) => gutter);
     this.gaps = Array.from({ length: frames.length + 1 }, () => new TextRenderable(this.renderer, { content: "", height: 0, flexShrink: 0, wrapMode: "none" }));
@@ -747,7 +754,7 @@ export class Viewer {
   }
 
   private followMap(): void {
-    const where = this.mindMap?.choice.node.where;
+    const where = this.mapSpot();
     if (!where) {
       this.showSection(undefined);
       return;
@@ -757,8 +764,13 @@ export class Viewer {
     this.scrollTo(section ? { centre: section } : { line: this.whereLine(where) ?? 0 });
   }
 
+  private mapSpot(): Where | undefined {
+    const node = this.mindMap?.choice.node;
+    return node?.source ?? node?.where;
+  }
+
   private highlightMapLine(): void {
-    const where = this.mindMap?.choice.node.where;
+    const where = this.mapSpot();
     this.showSection(where && where.page === this.page ? where : undefined);
   }
 
@@ -784,8 +796,28 @@ export class Viewer {
     return inside.length > 0 ? { first: inside[0]!, last: inside.at(-1)! } : undefined;
   }
 
+  private markLink(where: Where | undefined): void {
+    if (this.marked) {
+      this.marked.view.content = this.marked.text;
+      this.marked.view.syntaxStyle = this.style;
+      this.marked = undefined;
+    }
+    if (!where || where.page !== this.page || where.line === undefined || where.column === undefined || where.length === undefined) return;
+    const source = this.known.get(where.page);
+    if (source === undefined) return;
+    const index = blockAtLine(this.document.blocks, where.line);
+    const view = this.markdownViews[index];
+    const block = this.document.blocks[index];
+    const marked = parseDocument(source, { line: where.line, column: where.column, length: where.length }).blocks.find((candidate) => candidate.startLine === block?.startLine);
+    if (!view || marked?.kind !== "markdown") return;
+    this.marked = { view, text: view.content };
+    view.content = marked.text;
+    view.syntaxStyle = this.markingStyle;
+  }
+
   private showSection(where: Where | undefined): Section | undefined {
     const section = where ? this.sectionAt(where) : undefined;
+    this.markLink(where);
     this.section = section;
     this.blockViews.forEach((view, index) => {
       const inside = section !== undefined && index >= section.first && index <= section.last;
