@@ -1,11 +1,11 @@
 import { BorderChars, BoxRenderable, MarkdownRenderable, MouseButton, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument, resolveConflict, type Block, type Document, type Resolution } from "../document.ts";
 import { imageIdColor, placeholderLines, type ImageOutput } from "../render/image.ts";
-import { markdownStyle, sendImage } from "../render/markdown.ts";
+import { markdownNode, markdownStyle, sendImage, tableOptions } from "../render/markdown.ts";
 import type { MermaidRenderer } from "../render/mermaid.ts";
-import { styled, type Part } from "../render/styled.ts";
+import { fitHints, hintParts, partsWidth, pill, styled, type Hint, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
 import { contains, indexPage, listFiles, listPages, overlaps, pagesByTag, readPage, resolveAsset, resolveTarget } from "../notebook.ts";
 import { commentContext } from "../comment.ts";
@@ -52,6 +52,7 @@ export class Viewer {
   private readonly mindMapView: MindMapView;
   private readonly style: SyntaxStyle;
   private readonly markingStyle: SyntaxStyle;
+  private readonly renderNode: ReturnType<typeof markdownNode>;
   private readonly history = new History();
   private readonly known = new Map<string, string>();
   private readonly changed = new Set<string>();
@@ -90,6 +91,7 @@ export class Viewer {
   private pushing = false;
   private gitTimer: ReturnType<typeof setInterval> | undefined;
   private gitSoon: ReturnType<typeof setTimeout> | undefined;
+  private title: string | undefined;
 
   constructor(
     private readonly renderer: CliRenderer,
@@ -98,6 +100,7 @@ export class Viewer {
     this.following = options.follow;
     this.style = markdownStyle(renderer);
     this.markingStyle = markdownStyle(renderer, true);
+    this.renderNode = markdownNode(renderer);
     const frame = new BoxRenderable(renderer, { flexDirection: "column", width: "100%", height: "100%", backgroundColor: theme.background });
     this.scroll = new ScrollBoxRenderable(renderer, {
       flexGrow: 1,
@@ -108,7 +111,7 @@ export class Viewer {
         this.lookedAt();
       },
     });
-    this.status = new TextRenderable(renderer, { height: 1, wrapMode: "none", flexShrink: 0 });
+    this.status = new TextRenderable(renderer, { height: 1, wrapMode: "none", flexShrink: 0, bg: theme.surface });
     this.mindMapView = new MindMapView(renderer, frame);
     frame.add(this.scroll);
     frame.add(this.status);
@@ -116,6 +119,7 @@ export class Viewer {
     this.pickerView = new PickerView(renderer);
     for (const page of listPages(options.root)) this.remember(page.path);
     renderer.keyInput.on("keypress", this.onKey);
+    renderer.on("resize", this.onResize);
     renderer.setFrameCallback(async () => this.onFrame());
   }
 
@@ -328,6 +332,8 @@ export class Viewer {
     clearInterval(this.gitTimer);
     clearTimeout(this.gitSoon);
     this.renderer.keyInput.off("keypress", this.onKey);
+    this.renderer.off("resize", this.onResize);
+    this.setTitle("");
     this.closed();
   }
 
@@ -484,7 +490,7 @@ export class Viewer {
       flexShrink: 0,
       border: ["left"],
       customBorderChars: noBarChars,
-      borderColor: theme.changed,
+      borderColor: theme.quoll,
       onMouseDown: (event) => {
         if (event.button === MouseButton.LEFT && this.commenting && !this.picker && !this.editing && this.page) this.comment(index);
       },
@@ -502,7 +508,7 @@ export class Viewer {
 
   private blockView(block: Block, page: string | undefined, files: () => string[]): Renderable {
     if (block.kind === "markdown") {
-      return new MarkdownRenderable(this.renderer, { content: block.text, syntaxStyle: this.style, flexGrow: 1, flexShrink: 1, tableOptions: { widthMode: "content", cellPaddingX: 1 } });
+      return new MarkdownRenderable(this.renderer, { content: block.text, syntaxStyle: this.style, flexGrow: 1, flexShrink: 1, tableOptions, renderNode: this.renderNode });
     }
     const box = new BoxRenderable(this.renderer, { flexDirection: "column", flexGrow: 1, flexShrink: 1 });
     const images = this.options.images();
@@ -520,14 +526,15 @@ export class Viewer {
   }
 
   private conflictView(block: Extract<Block, { kind: "conflict" }>): BoxRenderable {
-    const box = new BoxRenderable(this.renderer, { flexDirection: "column", flexGrow: 1, flexShrink: 1, border: true, borderStyle: "rounded", borderColor: theme.warning, title: " merge conflict · 1 yours · 2 theirs · b both ", titleColor: theme.warning });
+    const box = new BoxRenderable(this.renderer, { flexDirection: "column", flexGrow: 1, flexShrink: 1, backgroundColor: theme.surface, border: ["left"], customBorderChars: barChars, borderColor: theme.warning, paddingLeft: 1, paddingRight: 1 });
+    box.add(new TextRenderable(this.renderer, { content: styled([bold(fg(theme.warning)("merge conflict")), "   ", ...hintParts([["1", "yours"], ["2", "theirs"], ["b", "both"]], "  ")]), wrapMode: "none", marginBottom: 1 }));
     const side = (label: string, text: string, color: string) => {
       box.add(new TextRenderable(this.renderer, { content: styled([bold(fg(color)(label))]), wrapMode: "none" }));
       box.add(text.trim() === "" ? new TextRenderable(this.renderer, { content: "(nothing)", fg: theme.muted }) : new MarkdownRenderable(this.renderer, { content: text, syntaxStyle: this.style, flexShrink: 1 }));
     };
-    side(`yours · ${block.oursLabel || "HEAD"}`, block.ours, theme.accent);
+    side(`yours · ${block.oursLabel || "HEAD"}`, block.ours, theme.quoll);
     box.add(new TextRenderable(this.renderer, { content: "", height: 1 }));
-    side(`theirs · ${block.theirsLabel || "incoming"}`, block.theirs, theme.follow);
+    side(`theirs · ${block.theirsLabel || "incoming"}`, block.theirs, theme.secondary);
     return box;
   }
 
@@ -592,6 +599,7 @@ export class Viewer {
       this.renderer.requestRender();
     }
     this.settleHints();
+    this.renderTitle();
     if (this.mindMapView.step()) this.renderer.requestRender();
     if (this.message && Date.now() > this.message.until) {
       this.message = undefined;
@@ -1058,7 +1066,7 @@ export class Viewer {
     this.gutters.forEach((gutter, index) => {
       const selected = commenting?.selected === index;
       gutter.width = commenting ? 2 : 0;
-      gutter.content = commenting ? styled([selected ? bold(fg(theme.selected)(letters.get(index) ?? "▌")) : fg(theme.accent)(letters.get(index) ?? " ")]) : "";
+      gutter.content = commenting ? styled([selected ? bold(fg(theme.quoll)(letters.get(index) ?? "▌")) : fg(theme.muted)(letters.get(index) ?? " ")]) : "";
       this.blockViews[index]!.backgroundColor = selected ? theme.surface : "transparent";
     });
     this.renderStatus();
@@ -1097,20 +1105,100 @@ export class Viewer {
     this.renderStatus();
   }
 
+  private readonly onResize = (): void => {
+    this.renderStatus();
+  };
+
   private renderStatus(): void {
     const page = this.page ?? "notebook";
     const tags = this.page ? this.tagsOf(this.page).map((tag) => ` #${tag}`).join("") : "";
-    const follow = this.following ? fg(theme.follow)(" ◉ following") : fg(theme.muted)(" ○ not following");
-    const door = this.mindMap?.door;
-    const help = this.commenting ? "attach: a letter, or j/k and Enter · click · Esc cancel" : this.mindMap?.filter !== undefined ? "type to filter · ↑↓ pick · Enter go · Esc cancel" : this.mindMap && !this.mapFocused ? "page: scroll · Tab atlas · a land · Esc exit" : door ? `Enter ⤳ ${door.to} · ⌫ back · Tab page · v view` : this.mindMap ? "hjkl move · ⌫ back · Tab page · v view · a land · Esc exit" : "f links · p pages · t tags · o outline · a atlas · e edit · H/L back/fwd · w follow · q quit";
-    const right = this.message ? fg(theme.warning)(this.message.text) : fg(this.commenting || this.mindMap ? theme.selected : theme.muted)(help);
     const git = this.gitStatus;
     const ahead = git?.merging
-      ? fg(theme.warning)(` ⚠ merging · ${count(git.conflicts.length, "conflicted page")}${git.elsewhere.length > 0 ? ` · ${git.elsewhere.length} elsewhere` : ""} · P finish · X abort`)
+      ? fg(theme.warning)(`  ⚠ merging · ${count(git.conflicts.length, "conflicted page")}${git.elsewhere.length > 0 ? ` · ${git.elsewhere.length} elsewhere` : ""} · P finish · X abort`)
       : git && (git.ahead > 0 || git.behind > 0)
-        ? fg(theme.changed)(` ${git.ahead > 0 ? `↑${git.ahead}` : ""}${git.behind > 0 ? `${git.ahead > 0 ? " " : ""}↓${git.behind}` : ""} P sync`)
+        ? fg(theme.quoll)(`  ${git.ahead > 0 ? `↑${git.ahead}` : ""}${git.behind > 0 ? `${git.ahead > 0 ? " " : ""}↓${git.behind}` : ""} P sync`)
         : "";
-    this.status.content = styled([bold(fg(theme.accent)(` ${page}`)), fg(theme.muted)(tags), ahead, follow, "   ", right]);
+    const follow = this.following ? [fg(theme.quoll)("  ◉ following edits")] : [];
+    const left: Part[] = [pill(this.mode()), " ", fg(theme.text)(page), fg(theme.muted)(tags), ahead, ...follow];
+    const room = this.renderer.width - partsWidth(left) - 3;
+    const right = this.message ? [fg(theme.warning)(this.message.text)] : hintParts(fitHints(this.hints(), room), "  ");
+    const gap = Math.max(this.renderer.width - partsWidth(left) - partsWidth(right) - 1, 2);
+    this.status.content = styled([...left, " ".repeat(gap), ...right, " "]);
+    this.renderTitle();
+  }
+
+  private mode(): string {
+    if (this.commenting) return "ATTACH";
+    if (this.mindMap) return "ATLAS";
+    if (this.gitStatus?.merging) return "MERGE";
+    return this.following ? "FOLLOW" : "READ";
+  }
+
+  private hints(): Hint[] {
+    if (this.commenting)
+      return [
+        ["a–z", "attach"],
+        ["j/k", "move"],
+        ["Enter", "attach selected"],
+        ["Esc", "cancel"],
+      ];
+    if (this.mindMap?.filter !== undefined)
+      return [
+        ["type", "filter"],
+        ["↑↓", "pick"],
+        ["Enter", "go"],
+        ["Esc", "cancel"],
+      ];
+    if (this.mindMap && !this.mapFocused)
+      return [
+        ["j/k", "scroll page"],
+        ["Tab", "atlas"],
+        ["a", "land"],
+        ["Esc", "exit"],
+      ];
+    const door = this.mindMap?.door;
+    if (door)
+      return [
+        ["Enter", `⤳ ${door.to}`],
+        ["⌫", "back"],
+        ["Tab", "page"],
+        ["v", "view"],
+      ];
+    if (this.mindMap)
+      return [
+        ["hjkl", "move"],
+        ["⌫", "back"],
+        ["Tab", "page"],
+        ["v", "view"],
+        ["a", "land"],
+        ["Esc", "exit"],
+      ];
+    return [
+      ["f", "links"],
+      ["p", "pages"],
+      ["t", "tags"],
+      ["o", "outline"],
+      ["a", "atlas"],
+      ["e", "edit"],
+      ["w", "follow"],
+      ["H/L", "back/fwd"],
+      ["q", "quit"],
+    ];
+  }
+
+  private renderTitle(): void {
+    const title = [basename(this.options.root), ...(this.page ? this.page.split("/") : [])].join(" › ");
+    if (title === this.title || !this.setTitle(title)) return;
+    this.title = title;
+  }
+
+  private setTitle(title: string): boolean {
+    try {
+      this.renderer.setTerminalTitle(title);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

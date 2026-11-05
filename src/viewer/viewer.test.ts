@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { RGBA } from "@opentui/core";
+import { CodeRenderable, RGBA, type Renderable } from "@opentui/core";
 import { MouseButtons, createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,6 +44,11 @@ async function open(follow = true, options: Partial<ViewerOptions> = {}): Promis
   return { setup, viewer };
 }
 
+function highlighting(renderable: Renderable): boolean {
+  if (renderable instanceof CodeRenderable && renderable.isHighlighting) return true;
+  return renderable.getChildren().some((child) => highlighting(child as Renderable));
+}
+
 async function settle(setup: TestRendererSetup): Promise<string> {
   let previous = "";
   let steady = 0;
@@ -51,7 +56,7 @@ async function settle(setup: TestRendererSetup): Promise<string> {
     await setup.renderOnce();
     await Bun.sleep(10);
     const current = setup.captureCharFrame();
-    steady = current === previous && current.trim().split("\n").length > 1 ? steady + 1 : 0;
+    steady = current === previous && current.trim().split("\n").length > 1 && !highlighting(setup.renderer.root) ? steady + 1 : 0;
     previous = current;
   }
   return previous;
@@ -136,7 +141,7 @@ describe("viewer", () => {
     setup.mockInput.pressTab();
     for (let line = 0; line < 3; line++) setup.mockInput.pressKey("k");
     frame = await settle(setup);
-    expect(frame).toContain("page: scroll");
+    expect(frame).toContain("j/k scroll page");
     expect(frame).toContain("filler 37");
     expect(frame).toContain("│ Rollout");
     setup.mockInput.pressTab();
@@ -193,7 +198,7 @@ describe("viewer", () => {
     expect(viewer.page).toBe("index.md");
     expect(frame).toContain("Read the plan first.");
     const paragraph = setup.captureSpans().lines.find((line) => line.spans.map((span) => span.text).join("").includes("Read the plan"))!;
-    const lit = paragraph.spans.filter((span) => span.bg.equals(RGBA.fromHex(theme.selected)));
+    const lit = paragraph.spans.filter((span) => span.bg.equals(RGBA.fromHex(theme.selection)));
     expect(lit.map((span) => span.text).join("")).toBe("the plan");
     setup.mockInput.pressKey("l");
     frame = await settle(setup);
@@ -535,7 +540,7 @@ describe("viewer", () => {
       const frame = await settle(setup);
       expect(frame).toMatch(/^\s*a\s+.*Plan/m);
       expect(frame).toMatch(/^\s*s\s+intro line/m);
-      expect(frame).toContain("attach: a letter");
+      expect(frame).toContain("a–z attach");
       setup.mockInput.pressKey("f");
       await settle(setup);
       expect(replies).toEqual([
@@ -553,7 +558,7 @@ describe("viewer", () => {
       const { request: asking, replies } = request();
       viewer.askForContext(asking);
       let frame = await settle(setup);
-      expect(frame).toContain("attach: a letter");
+      expect(frame).toContain("a–z attach");
       setup.mockInput.pressKey("s");
       frame = await settle(setup);
       expect(labels(replies)).toEqual(['index.md:3 · "intro line"']);
@@ -579,7 +584,7 @@ describe("viewer", () => {
 
     test("komux cancelling leaves pick mode", async () => {
       const { setup, request: asking } = await asked();
-      expect(await settle(setup)).toContain("attach: a letter");
+      expect(await settle(setup)).toContain("a–z attach");
       asking.end();
       expect(await settle(setup)).toContain("f links");
     });
@@ -588,7 +593,7 @@ describe("viewer", () => {
       writeFileSync(join(root, "index.md"), page);
       const { setup } = await open(false);
       setup.mockInput.pressKey("c");
-      expect(await settle(setup)).not.toContain("attach: a letter");
+      expect(await settle(setup)).not.toContain("a–z attach");
     });
 
     test("clicking a block with the left button attaches it, only while picking one", async () => {

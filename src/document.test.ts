@@ -79,7 +79,7 @@ describe("parseDocument", () => {
       { label: "notes", target: "notes.md", line: 0, column: 37, length: 17, lead: false },
     ]);
     const block = doc.blocks[0]!;
-    expect(block.kind === "markdown" && block.text).toBe("See **the rollout** and [notes](notes.md) or ↪ **other page**.");
+    expect(block.kind === "markdown" && block.text).toBe("See [the rollout] and [notes](notes.md) or ↪ [other page].");
   });
 
   test("marks a link that opens a list item, as an index's entries do", () => {
@@ -98,7 +98,7 @@ describe("parseDocument", () => {
     expect(block.kind === "markdown" && block.text).toBe("See ~~the plan~~ and [notes](notes.md).");
     expect(doc.links.map((link) => link.column)).toEqual([4, 26]);
     const stale = parseDocument("# T\n\nSee [[plan|the plan]] and [notes](notes.md).", { line: 2, column: 2, length: 17 }).blocks.find((candidate) => candidate.startLine === 2)!;
-    expect(stale.kind === "markdown" && stale.text).toBe("See **the plan** and [notes](notes.md).");
+    expect(stale.kind === "markdown" && stale.text).toBe("See [the plan] and [notes](notes.md).");
   });
 
   test("turns a mermaid fence into a diagram block and leaves other fences as markdown", () => {

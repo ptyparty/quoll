@@ -222,7 +222,8 @@ function markSpan(line: string, span: Span): string {
 function rewriteWikiLinks(line: string): string {
   return line.replace(wikiLink, (_whole, bang: string, target: string, alias: string | undefined) => {
     const label = alias?.trim() || target.trim();
-    return bang ? `↪ **${label}**` : `**${label}**`;
+    const link = `[${label.replace(/[[\]]/g, "\\$&")}]`;
+    return bang ? `↪ ${link}` : link;
   });
 }
 
