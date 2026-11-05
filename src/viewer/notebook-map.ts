@@ -115,7 +115,8 @@ export function buildNotebookTree(pages: NotebookPage[], resolve: (from: string,
       if (parent.get(target) === name && !placed.has(target)) {
         placed.add(target);
         const page = pageNode(target);
-        const link = info.document.links.find((candidate) => resolve(name, candidate.target)?.page === target);
+        const links = info.document.links.filter((candidate) => resolve(name, candidate.target)?.page === target);
+        const link = links.find((candidate) => candidate.lead) ?? links[0];
         if (link) page.source = { page: name, line: link.line, column: link.column, length: link.length };
         node.children.push(page);
       }

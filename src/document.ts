@@ -215,8 +215,8 @@ function linksIn(line: string, index: number): Link[] {
 
 function markSpan(line: string, span: Span): string {
   const end = span.column + span.length;
-  const label = linksIn(line, span.line).find((link) => link.column === span.column)?.label ?? line.slice(span.column, end);
-  return `${line.slice(0, span.column)}~~${label}~~${line.slice(end)}`;
+  const link = linksIn(line, span.line).find((candidate) => candidate.column === span.column && candidate.length === span.length);
+  return link ? `${line.slice(0, span.column)}~~${link.label}~~${line.slice(end)}` : line;
 }
 
 function rewriteWikiLinks(line: string): string {
