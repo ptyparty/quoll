@@ -275,7 +275,7 @@ export class MindMapView {
     private readonly renderer: CliRenderer,
     parent: BoxRenderable,
   ) {
-    this.box = new BoxRenderable(renderer, { width: "100%", height: 0, flexShrink: 0, overflow: "hidden", visible: false, border: ["bottom"], borderColor: theme.border, backgroundColor: theme.background });
+    this.box = new BoxRenderable(renderer, { width: "100%", height: 0, flexShrink: 0, overflow: "hidden", visible: false, paddingBottom: 1, backgroundColor: theme.surface });
     this.text = new TextRenderable(renderer, { wrapMode: "none", flexShrink: 0 });
     this.caption = new TextRenderable(renderer, { wrapMode: "none", flexShrink: 0, height: 1 });
     this.box.add(this.text);
@@ -285,7 +285,7 @@ export class MindMapView {
 
   focus(map: boolean): void {
     this.focused = map;
-    this.box.borderColor = map ? theme.accent : theme.border;
+    this.box.backgroundColor = map ? theme.surface2 : theme.surface;
     if (this.state) this.drawCaption(this.state);
   }
 
@@ -397,12 +397,12 @@ export class MindMapView {
   private drawCaption(state: MapState): void {
     const width = this.renderer.width;
     const filter = state.filterStatus;
-    const query: Part[] = filter ? [bold(fg(theme.accent)(` /${filter.query}`)), fg(filter.count === 0 ? theme.warning : theme.muted)(filter.count === 0 ? "  no matches" : `  ${filter.at}/${filter.count}`), fg(theme.border)("  │")] : [];
+    const query: Part[] = filter ? [bold(fg(theme.quoll)(` /${filter.query}`)), fg(filter.count === 0 ? theme.warning : theme.muted)(filter.count === 0 ? "  no matches" : `  ${filter.at}/${filter.count}`), fg(theme.faint)("  │")] : [];
     const used = query.reduce((sum, part) => sum + Bun.stringWidth(typeof part === "string" ? part : part.text), 0);
     const detail = state.trail.at(-1)?.detail;
     const suffix = `${detail ? ` (${detail})` : ""}${state.depth > 0 ? ` ⌫${state.depth}` : ""}`;
     const path = breadcrumb(state.trail.map((node) => plain(node.label)), width - used - Bun.stringWidth(suffix) - 2);
-    const label = this.focused ? (text: string) => bold(fg(theme.selected)(text)) : (text: string) => fg(theme.muted)(text);
+    const label = this.focused ? (text: string) => bold(fg(theme.quoll)(text)) : (text: string) => fg(theme.muted)(text);
     this.caption.content = styled([...query, label(` ${path}`), fg(theme.muted)(suffix)]);
   }
 
@@ -412,7 +412,7 @@ export class MindMapView {
     const size = Math.max(Math.floor((width - 2) / 3), 8);
     const selected = state.trail.at(-1);
     const columns = state.columns(Math.max(rows - 2, 1)).map((column, at) => {
-      const cells: Part[][] = [[bold(fg(theme.muted)(fit(column.title ? ` ${plain(column.title)}` : "", size)))], [fg(theme.border)("─".repeat(size))]];
+      const cells: Part[][] = [[bold(fg(theme.muted)(fit(column.title ? ` ${plain(column.title)}` : "", size)))], [fg(theme.line)("─".repeat(size))]];
       for (const item of column.items) {
         if (item.kind === "text") {
           for (const line of wrap(item.label, size - 2)) {
@@ -427,8 +427,8 @@ export class MindMapView {
         const label = ` ${columnLabel(item)}`;
         const room = size - Bun.stringWidth(label) - 1;
         const detail = item.detail && Bun.stringWidth(` ${item.detail}`) <= room ? fit(` ${item.detail}`, room) : "";
-        if (item === selected && at === 1) cells.push([bold(bg(theme.selected)(fg(theme.background)(fit(label, size))))]);
-        else if (item === column.focus) cells.push([bold(bg(theme.surface)(fg(kindColor(item))(fit(label, size))))]);
+        if (item === selected && at === 1) cells.push([bold(bg(theme.selection)(fg(theme.text)(fit(label, size))))]);
+        else if (item === column.focus) cells.push([bold(bg(theme.raised)(fg(kindColor(item))(fit(label, size))))]);
         else cells.push([fg(kindColor(item))(fit(label, size - Bun.stringWidth(detail))), fg(theme.muted)(detail)]);
       }
       return cells;
@@ -448,7 +448,7 @@ export class MindMapView {
     const lines: Part[] = [];
     for (let y = 0; y < this.rows(); y++) {
       if (y > 0) lines.push("\n");
-      const row = strip.flatMap((cells, at) => [...(at > 0 ? [fg(theme.border)("│")] : []), ...(cells[y] ?? [" ".repeat(size)])]);
+      const row = strip.flatMap((cells, at) => [...(at > 0 ? [fg(theme.line)("│")] : []), ...(cells[y] ?? [" ".repeat(size)])]);
       lines.push(...sliceParts(row, offset, width));
     }
     this.text.content = styled(lines);
@@ -534,13 +534,13 @@ type Look = { map: MindMap; selected: number; trail: Set<MapNode>; room: string 
 function cellStyle(cell: Cell, look: Look): ((text: string) => Part) | undefined {
   const depth = cell.node !== undefined ? look.map.placed[cell.node]!.depth : (cell.depth ?? look.focus);
   const up = Math.max(look.focus - depth, 0);
-  if (cell.line) return (text) => fg(fade(cell.lit ? theme.selected : theme.border, up))(text);
+  if (cell.line) return (text) => fg(fade(cell.lit ? theme.quoll : theme.faint, up))(text);
   if (cell.node === undefined) return undefined;
   const node = look.map.placed[cell.node]!.node;
-  if (cell.node === look.selected) return (text) => bold(bg(theme.selected)(fg(theme.background)(text)));
+  if (cell.node === look.selected) return (text) => bold(bg(theme.selection)(fg(theme.text)(text)));
   const inRoom = look.room !== undefined && (node.owner ?? node.where?.page) === look.room;
   const style = nodeStyle(node, look.trail.has(node), inRoom, up);
-  return inRoom ? (text) => bg(theme.surface)(style(text)) : style;
+  return inRoom ? (text) => bg(theme.raised)(style(text)) : style;
 }
 
 function nodeStyle(node: MapNode, onTrail: boolean, inRoom: boolean, up: number): (text: string) => Part {
@@ -552,14 +552,14 @@ function fade(color: string, steps: number): string {
   if (steps === 0) return color;
   const amount = Math.min(steps * fadeStep, maxFade);
   const channel = (hex: string, at: number) => parseInt(hex.slice(at, at + 2), 16);
-  const mix = [1, 3, 5].map((at) => Math.round(channel(color, at) * (1 - amount) + channel(theme.background, at) * amount));
+  const mix = [1, 3, 5].map((at) => Math.round(channel(color, at) * (1 - amount) + channel(theme.surface, at) * amount));
   return `#${mix.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function kindColor(node: MapNode): string {
-  if (node.kind === "root" || node.kind === "page" || node.kind === "link" || node.kind === "anchor") return theme.accent;
-  if (node.kind === "portal") return node.back ? theme.follow : theme.accent;
-  if (node.kind === "tag") return theme.changed;
+  if (node.kind === "root" || node.kind === "page" || node.kind === "link" || node.kind === "anchor") return theme.quoll;
+  if (node.kind === "portal") return node.back ? theme.secondary : theme.quoll;
+  if (node.kind === "tag") return theme.syntax.number;
   if (node.kind === "group") return theme.muted;
   return theme.text;
 }

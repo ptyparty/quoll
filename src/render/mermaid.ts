@@ -2,6 +2,30 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stateDir } from "../state.ts";
+import { theme } from "./theme.ts";
+
+const mermaidConfig = JSON.stringify({
+  theme: "base",
+  themeVariables: {
+    darkMode: true,
+    background: theme.background,
+    fontFamily: "monospace",
+    primaryColor: theme.raised,
+    primaryTextColor: theme.text,
+    primaryBorderColor: theme.quoll,
+    secondaryColor: theme.surface2,
+    secondaryTextColor: theme.text,
+    secondaryBorderColor: theme.muted,
+    tertiaryColor: theme.surface,
+    tertiaryTextColor: theme.text,
+    tertiaryBorderColor: theme.line,
+    lineColor: theme.muted,
+    textColor: theme.text,
+    noteBkgColor: theme.surface2,
+    noteTextColor: theme.text,
+    noteBorderColor: theme.quoll,
+  },
+});
 
 export type Diagram = { png: string } | { error: string } | { pending: true };
 
@@ -18,7 +42,7 @@ export class MermaidRenderer {
   ) {}
 
   diagram(source: string, onDrawn: () => void): Diagram {
-    const key = createHash("sha256").update(source).digest("hex").slice(0, 32);
+    const key = createHash("sha256").update(mermaidConfig).update(source).digest("hex").slice(0, 32);
     const png = join(this.dir, `${key}.png`);
     if (existsSync(png)) return { png };
     const failure = this.failures.get(key);
@@ -54,17 +78,19 @@ export function findChrome(env: Record<string, string | undefined> = process.env
 async function drawWithMermaidCli(source: string, png: string, chrome: string): Promise<void> {
   const input = `${png}.mmd`;
   const config = `${png}.puppeteer.json`;
+  const look = `${png}.config.json`;
   const output = `${png}.drawing.png`;
   await Bun.write(input, source);
   await Bun.write(config, JSON.stringify({ executablePath: chrome, headless: "shell" }));
+  await Bun.write(look, mermaidConfig);
   try {
     const cli = join(dirname(Bun.resolveSync("@mermaid-js/mermaid-cli", import.meta.dir)), "cli.js");
-    const child = Bun.spawn([process.execPath, cli, "-q", "-p", config, "-i", input, "-o", output, "-t", "dark", "-b", "transparent", "-s", "2"], { stdout: "ignore", stderr: "pipe" });
+    const child = Bun.spawn([process.execPath, cli, "-q", "-p", config, "-c", look, "-i", input, "-o", output, "-b", "transparent", "-s", "2"], { stdout: "ignore", stderr: "pipe" });
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     if (code !== 0 || !existsSync(output)) throw new Error(`Couldn't draw the diagram: ${reason(stderr)}`);
     renameSync(output, png);
   } finally {
-    for (const file of [input, config, output]) rmSync(file, { force: true });
+    for (const file of [input, config, look, output]) rmSync(file, { force: true });
   }
 }
 
