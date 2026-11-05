@@ -736,4 +736,51 @@ describe("viewer", () => {
     expect(lit(theme.match)).toEqual([]);
     expect(lit(theme.selection)).toEqual([]);
   });
+
+  test("search finds matches deep in long tables and wrapped paragraphs, keeps them through a redraw, and puts things back on Esc", async () => {
+    const rows = Array.from({ length: 20 }, (_, index) => `| row ${index} | ${index === 19 ? "the needle" : "hay"} |`);
+    const wrapped = Array.from({ length: 60 }, () => "word").join(" ") + " needle";
+    writeFileSync(join(root, "index.md"), ["# Index", "", "See [notes](https://example.com).", "", "| Name | Value |", "| --- | --- |", ...rows, "", ...Array.from({ length: 20 }, (_, index) => `filler ${index}`), "", wrapped].join("\n"));
+    const { setup, viewer } = await open(false);
+    const codes = () => {
+      const found: CodeRenderable[] = [];
+      const visit = (view: Renderable) => (view instanceof CodeRenderable ? found.push(view) : view.getChildren().forEach((child) => visit(child as Renderable)));
+      visit(setup.renderer.root);
+      return found;
+    };
+    const before = codes().map((code) => code.onChunks);
+    const lit = () =>
+      setup
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
+        .filter((span) => span.bg.equals(RGBA.fromHex(theme.match)))
+        .map((span) => span.text);
+    for (const ch of "/needle") setup.mockInput.pressKey(ch);
+    let frame = await settle(setup);
+    expect(frame).toContain("1/2");
+    expect(frame).toContain("row 19");
+    expect(lit()).toEqual(["needle"]);
+    const table = (() => {
+      const visit = (view: Renderable): Renderable | undefined => (view.constructor.name.startsWith("TextTable") ? view : view.getChildren().map((child) => visit(child as Renderable)).find(Boolean));
+      return visit(setup.renderer.root) as unknown as { content: { text: string }[][][] };
+    })();
+    table.content = table.content.map((row) => row.map((cell) => cell.map((chunk) => ({ ...chunk, bg: undefined }))));
+    frame = await settle(setup);
+    expect(lit()).toEqual(["needle"]);
+    setup.mockInput.pressEnter();
+    setup.mockInput.pressKey("n");
+    frame = await settle(setup);
+    expect(frame).toContain("2/2");
+    expect(lit()).toEqual(["needle"]);
+    setup.mockInput.pressKey("g");
+    await settle(setup);
+    for (const ch of "/needle") setup.mockInput.pressKey(ch);
+    await settle(setup);
+    setup.mockInput.pressEscape();
+    frame = await settle(setup);
+    expect(frame).toContain("See notes");
+    expect(lit()).toEqual([]);
+    expect(codes().map((code) => code.onChunks)).toEqual(before);
+    expect(viewer.keys().groups.map((group) => group.name)).toContain("Go");
+  });
 });

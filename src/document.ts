@@ -220,10 +220,13 @@ function markSpan(line: string, span: Span): string {
 }
 
 function rewriteWikiLinks(line: string): string {
-  return line.replace(wikiLink, (_whole, bang: string, target: string, alias: string | undefined) => {
+  return line.replace(wikiLink, (whole: string, bang: string, target: string, alias: string | undefined, at: number) => {
     const label = alias?.trim() || target.trim();
     const link = `[${label.replace(/[[\]]/g, "\\$&")}]`;
-    return bang ? `↪ ${link}` : link;
+    const before = !bang && line[at - 1] === "]" && line[at - 2] !== "]" ? " " : "";
+    const next = line[at + whole.length];
+    const after = next === "(" || next === "[" || (next === ":" && /^ {0,3}$/.test(line.slice(0, at))) ? " " : "";
+    return `${before}${bang ? `↪ ${link}` : link}${after}`;
   });
 }
 

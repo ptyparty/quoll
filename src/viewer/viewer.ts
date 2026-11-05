@@ -13,11 +13,11 @@ import type { ContextRequest } from "../context.ts";
 import type { GitStatus, NotebookGit } from "../git.ts";
 import type { Reply } from "../socket.ts";
 import { History } from "./history.ts";
-import { PickerState, PickerView, pickerBindings, type PickerItem, type PickerOutcome } from "./picker.ts";
+import { PickerState, PickerView, pickerBindings, pickerKey, type PickerItem, type PickerOutcome } from "./picker.ts";
 import { MindMapView, type MapNode, type Where } from "./mindmap.ts";
-import { NotebookMapState, atlasBindings, atlasFilterBindings, buildNotebookTree, type NotebookMapOutcome } from "./notebook-map.ts";
-import { HelpView, MenuView, type MenuGroup } from "./key-cards.ts";
-import { active, bindingFor, keyGroups, type AppKeys, type Binding } from "./keys.ts";
+import { NotebookMapState, atlasBindings, atlasFilterBindings, buildNotebookTree, notebookMapKey, type NotebookMapOutcome } from "./notebook-map.ts";
+import { HelpView, MenuView } from "./key-cards.ts";
+import { active, bindingFor, keyGroups, typedText, type AppKeys, type Binding } from "./keys.ts";
 import { findMatches, markMatches } from "./search.ts";
 
 export type ViewerOptions = {
@@ -30,9 +30,11 @@ export type ViewerOptions = {
 };
 
 type Picker = { state: PickerState<() => void> };
-type SearchMatch = { target: Searchable; ordinal: number; row: number };
+type SearchMatch = { target: Searchable; ordinal: number; at: number };
 type Searchable = CodeRenderable | TextTableRenderable;
-type Search = { query: string; typing: boolean; current: number; matches: SearchMatch[]; targets: Searchable[]; texts: string; from: number };
+type Search = { query: string; typing: boolean; current: number; matches: SearchMatch[]; seen: Seen[]; from: number };
+type Seen = { target: Searchable; source: unknown; live: unknown; highlighting: boolean };
+type ChunkHook = CodeRenderable["onChunks"];
 type Section = { first: number; last: number };
 type ScrollTarget = { line: number } | { top: number } | { centre: Section };
 type BlockFrame = { frame: BoxRenderable; gutter: TextRenderable };
@@ -82,8 +84,8 @@ export class Viewer {
   private mapNode: MapNode | undefined;
   private menu: Binding<() => void>[] | undefined;
   private search: Search | undefined;
-  private painted = new WeakMap<Searchable, string>();
-  private tableSources = new WeakMap<TextTableRenderable, TextTableContent>();
+  private readonly codeMarks = new WeakMap<CodeRenderable, { key: string; applied: ChunkHook; original: ChunkHook }>();
+  private readonly tableMarks = new WeakMap<TextTableRenderable, { key: string; applied: TextTableContent; original: TextTableContent }>();
   private refocusMap = false;
   private mapReturn: { page: string | undefined; top: number } | undefined;
   private section: Section | undefined;
@@ -686,10 +688,9 @@ export class Viewer {
   }
 
   private unbound(key: KeyEvent): void {
-    const text = !key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " " ? key.sequence : undefined;
+    const text = typedText(key);
     if (this.picker) {
-      if (text) this.picker.state.type(text);
-      this.pickerView.render(this.picker.state);
+      this.pickerDone(pickerKey(this.picker.state, key));
     } else if (this.commenting) {
       if (key.name && !key.ctrl && this.commenting.hints.has(key.name)) this.comment(this.commenting.hints.get(key.name)!);
     } else if (this.helpView.open) {
@@ -698,9 +699,8 @@ export class Viewer {
       this.closeMenu();
     } else if (this.search?.typing) {
       if (text) this.typeSearch(this.search.query + text);
-    } else if (this.mindMap?.filter !== undefined && text) {
-      this.mindMap.typeFilter(text);
-      this.mapOutcome("move");
+    } else if (this.mindMap?.filter !== undefined) {
+      this.mapOutcome(notebookMapKey(this.mindMap, key));
     }
   }
 
@@ -801,9 +801,9 @@ export class Viewer {
   private searchPromptBindings(): Binding<() => void>[] {
     return [
       { group: "Search", label: "search for", on: [], keys: "type" },
-      { group: "Search", label: "erase", on: ["backspace"], run: () => (this.search!.query === "" ? this.clearSearch() : this.typeSearch(this.search!.query.slice(0, -1))) },
+      { group: "Search", label: "erase", on: ["backspace"], run: () => (this.search!.query === "" ? this.cancelSearch() : this.typeSearch(this.search!.query.slice(0, -1))) },
       { group: "Search", label: "keep the matches", on: ["return"], run: () => this.acceptSearch() },
-      { group: "Search", label: "cancel", on: ["escape", "^c"], run: () => this.clearSearch() },
+      { group: "Search", label: "cancel", on: ["escape", "^c"], run: () => this.cancelSearch() },
     ];
   }
 
@@ -819,12 +819,7 @@ export class Viewer {
 
   private openMenu(): void {
     this.menu = active(this.bindings()).filter((binding) => binding.menu !== undefined && binding.run !== undefined);
-    const groups: MenuGroup[] = [];
-    for (const entry of this.menu) {
-      const group = groups.find((candidate) => candidate.name === entry.group) ?? groups[groups.push({ name: entry.group, items: [] }) - 1]!;
-      group.items.push([entry.menu!, entry.label]);
-    }
-    this.menuView.render(this.mindMap ? "quoll · atlas" : "quoll", groups);
+    this.menuView.render(this.mindMap ? "quoll · atlas" : "quoll", keyGroups(this.menuBindings(this.menu).filter((binding) => binding.group !== "Menu")));
   }
 
   private closeMenu(): void {
@@ -834,7 +829,7 @@ export class Viewer {
 
   private startSearch(): void {
     this.clearSearch();
-    this.search = { query: "", typing: true, current: 0, matches: [], targets: [], texts: "", from: this.scroll.scrollTop };
+    this.search = { query: "", typing: true, current: 0, matches: [], seen: [], from: this.scroll.scrollTop };
   }
 
   private typeSearch(query: string): void {
@@ -854,6 +849,12 @@ export class Viewer {
     search.typing = false;
   }
 
+  private cancelSearch(): void {
+    const from = this.search!.from;
+    this.clearSearch();
+    this.scrollTo({ top: from });
+  }
+
   private nextMatch(delta: number): void {
     const search = this.search!;
     const count = search.matches.length;
@@ -871,51 +872,81 @@ export class Viewer {
 
   private refreshSearch(): void {
     const search = this.search!;
-    const targets = searchTargets(this.blockViews);
-    search.targets = targets;
-    search.texts = targets.map(searchText).join("\0");
-    search.matches = targets.flatMap((target) => matchesIn(target, search.query));
+    search.matches = searchTargets(this.blockViews).flatMap((target) => matchesIn(target, search.query));
     search.current = Math.min(search.current, Math.max(search.matches.length - 1, 0));
   }
 
   private keepSearchFresh(): void {
     const search = this.search;
     if (!search || search.query === "") return;
-    const targets = searchTargets(this.blockViews);
-    const same = targets.length === search.targets.length && targets.every((target, index) => target === search.targets[index]);
-    if (same && targets.map(searchText).join("\0") === search.texts) return;
+    const seen = this.searchSeen();
+    if (seen.length === search.seen.length && seen.every((now, index) => sameSeen(now, search.seen[index]!))) return;
     this.refreshSearch();
     this.paintSearch();
     this.renderStatus();
   }
 
+  private searchSeen(): Seen[] {
+    return searchTargets(this.blockViews).map((target) =>
+      target instanceof CodeRenderable
+        ? { target, source: target.content, live: target.onChunks, highlighting: target.isHighlighting }
+        : { target, source: this.tableMarks.get(target)?.original ?? target.content, live: target.content, highlighting: false },
+    );
+  }
+
   private paintSearch(): void {
     const search = this.search;
+    const query = search?.query ?? "";
     const current = search?.matches[search.current];
     for (const target of searchTargets(this.blockViews)) {
-      const query = search?.query ?? "";
       const ordinal = current?.target === target ? current.ordinal : undefined;
       const key = query === "" ? "" : `${query}\0${ordinal ?? ""}`;
-      if ((this.painted.get(target) ?? "") === key) continue;
-      this.painted.set(target, key);
-      if (target instanceof CodeRenderable) {
-        target.onChunks = key === "" ? undefined : (chunks) => markMatches(chunks, query, ordinal);
-        continue;
-      }
-      const original = this.tableSources.get(target) ?? target.content;
-      this.tableSources.set(target, original);
-      let seen = 0;
-      const mark = (cell: TextChunk[]) => {
-        const at = seen;
-        seen += findMatches(cell.map((chunk) => chunk.text).join(""), query).length;
-        return markMatches(cell, query, ordinal === undefined ? undefined : ordinal - at);
-      };
-      target.content = key === "" ? original : original.map((row) => row.map((cell) => cell && mark(cell)));
+      if (target instanceof CodeRenderable) this.paintCode(target, key, query, ordinal);
+      else this.paintTable(target, key, query, ordinal);
     }
+    if (search) search.seen = this.searchSeen();
+  }
+
+  private paintCode(target: CodeRenderable, key: string, query: string, ordinal: number | undefined): void {
+    const marks = this.codeMarks.get(target);
+    const fresh = marks?.applied === target.onChunks ? marks : undefined;
+    if ((fresh?.key ?? "") === key) return;
+    const original = fresh ? fresh.original : target.onChunks;
+    if (key === "") {
+      target.onChunks = original;
+      this.codeMarks.delete(target);
+      return;
+    }
+    const applied: NonNullable<CodeRenderable["onChunks"]> = async (chunks, context) => markMatches((await original?.(chunks, context)) ?? chunks, query, ordinal);
+    target.onChunks = applied;
+    this.codeMarks.set(target, { key, applied, original });
+  }
+
+  private paintTable(target: TextTableRenderable, key: string, query: string, ordinal: number | undefined): void {
+    const marks = this.tableMarks.get(target);
+    const fresh = marks?.applied === target.content ? marks : undefined;
+    if ((fresh?.key ?? "") === key) return;
+    const original = fresh ? fresh.original : target.content;
+    if (key === "") {
+      target.content = original;
+      this.tableMarks.delete(target);
+      return;
+    }
+    let seen = 0;
+    const mark = (cell: TextChunk[]) => {
+      const at = seen;
+      seen += findMatches(chunkText(cell), query).length;
+      return markMatches(cell, query, ordinal === undefined ? undefined : ordinal - at);
+    };
+    const applied = original.map((row) => row.map((cell) => cell && mark(cell)));
+    target.content = applied;
+    this.tableMarks.set(target, { key, applied, original });
   }
 
   private matchTop(match: SearchMatch): number {
-    return match.target.y - this.scroll.content.y + match.row;
+    const target = match.target;
+    const row = target instanceof CodeRenderable ? codeRow(target, match.at) : tableRowTop(target, match.at);
+    return target.y - this.scroll.content.y + row;
   }
 
   private showMatch(): void {
@@ -1461,30 +1492,41 @@ function searchTargets(views: Renderable[]): Searchable[] {
   return found;
 }
 
-function searchText(target: Searchable): string {
-  return target instanceof CodeRenderable ? target.plainText : tableCells(target).join("\t");
+function sameSeen(now: Seen, before: Seen): boolean {
+  return now.target === before.target && now.source === before.source && now.live === before.live && now.highlighting === before.highlighting;
 }
 
-function tableCells(target: TextTableRenderable): string[] {
-  return target.content.flatMap((row) => row.map((cell) => (cell ?? []).map((chunk) => chunk.text).join("")));
+function chunkText(chunks: TextChunk[]): string {
+  return chunks.map((chunk) => chunk.text).join("");
 }
 
 function matchesIn(target: Searchable, query: string): SearchMatch[] {
   if (target instanceof CodeRenderable) {
     const text = target.plainText;
-    const width = Math.max(target.width, 1);
+    let column = 0;
+    let from = 0;
     return findMatches(text, query).map((range, ordinal) => {
-      const lines = text.slice(0, range.start).split("\n");
-      const row = lines.length - 1 + Math.floor(Bun.stringWidth(lines.at(-1)!) / width);
-      return { target, ordinal, row };
+      const lines = text.slice(from, range.start).split("\n");
+      column += lines.reduce((sum, line) => sum + Bun.stringWidth(line), lines.length - 1);
+      from = range.start;
+      return { target, ordinal, at: column };
     });
   }
   let ordinal = 0;
-  return target.content.flatMap((row, index) =>
-    row.flatMap((cell) =>
-      findMatches((cell ?? []).map((chunk) => chunk.text).join(""), query).map((range) => ({ target, ordinal: ordinal++, row: index + 1 + (index > 0 ? 1 : 0) })),
-    ),
-  );
+  return target.content.flatMap((row, index) => row.flatMap((cell) => findMatches(chunkText(cell ?? []), query).map(() => ({ target, ordinal: ordinal++, at: index }))));
+}
+
+function codeRow(target: CodeRenderable, column: number): number {
+  const starts = target.lineInfo.lineStartCols;
+  let row = 0;
+  while (row + 1 < starts.length && starts[row + 1]! <= column) row++;
+  return row;
+}
+
+function tableRowTop(target: TextTableRenderable, row: number): number {
+  const offsets = (target as unknown as { _layout?: { rowOffsets?: number[] } })._layout?.rowOffsets;
+  const offset = offsets?.[row];
+  return offset === undefined ? 1 + row * 2 : offset + 1;
 }
 
 function deleteCommand(id: number): string {

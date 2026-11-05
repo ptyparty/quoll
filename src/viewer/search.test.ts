@@ -12,6 +12,8 @@ describe("page search", () => {
       { start: 7, end: 13 },
     ]);
     expect(findMatches("Coupon coupon", "Coupon")).toEqual([{ start: 0, end: 6 }]);
+    expect(findMatches("İstanbul coupon (a.b)", "coupon")).toEqual([{ start: 9, end: 15 }]);
+    expect(findMatches("İstanbul coupon (a.b)", "(a.b)")).toEqual([{ start: 16, end: 21 }]);
   });
 
   test("lights a match that spans styled chunks, the current one brighter", () => {

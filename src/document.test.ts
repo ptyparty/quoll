@@ -82,6 +82,13 @@ describe("parseDocument", () => {
     expect(block.kind === "markdown" && block.text).toBe("See [the rollout] and [notes](notes.md) or ↪ [other page].");
   });
 
+  test("keeps a notebook link from joining the text beside it into markdown link syntax", () => {
+    const text = (source: string) => parseDocument(source).blocks.map((block) => (block.kind === "markdown" ? block.text : "")).join("\n\n");
+    expect(text("[[plan]](draft) and [[a]][[b]]")).toBe("[plan] (draft) and [a] [b]");
+    expect(text("[[auth]]: done")).toBe("[auth] : done");
+    expect(text("see [[auth]]: done")).toBe("see [auth]: done");
+  });
+
   test("marks a link that opens a list item, as an index's entries do", () => {
     const doc = parseDocument("- [Plan](plan.md): the work queue, see [notes](notes.md)\n1. [[decisions]]");
     expect(doc.links.map((link) => `${link.label} ${link.lead}`)).toEqual(["Plan true", "notes false", "decisions true"]);

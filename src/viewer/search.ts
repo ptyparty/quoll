@@ -10,11 +10,8 @@ const bold = 1;
 
 export function findMatches(text: string, query: string): Range[] {
   if (query === "") return [];
-  const folded = query === query.toLowerCase();
-  const haystack = folded ? text.toLowerCase() : text;
-  const ranges: Range[] = [];
-  for (let at = haystack.indexOf(query); at !== -1; at = haystack.indexOf(query, at + query.length)) ranges.push({ start: at, end: at + query.length });
-  return ranges;
+  const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), query === query.toLowerCase() ? "giu" : "gu");
+  return [...text.matchAll(pattern)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
 }
 
 export function markMatches(chunks: TextChunk[], query: string, current: number | undefined): TextChunk[] {

@@ -1,4 +1,4 @@
-import { BorderChars, BoxRenderable, SyntaxStyle, TextRenderable, type CliRenderer, type MarkdownOptions, type MarkdownTableOptions } from "@opentui/core";
+import { BorderChars, BoxRenderable, CodeRenderable, SyntaxStyle, TextRenderable, type CliRenderer, type MarkdownOptions, type MarkdownTableOptions } from "@opentui/core";
 import { fitImage, newImageId, readImage, uploadCommands, type ImageBox, type ImageOutput } from "./image.ts";
 import { theme } from "./theme.ts";
 
@@ -56,6 +56,11 @@ export function markdownStyle(renderer: CliRenderer, marking = false): SyntaxSty
 
 export const tableOptions: MarkdownTableOptions = { widthMode: "content", cellPaddingX: 1, borderStyle: "rounded", borderColor: theme.line };
 
+function ruleFor(text: string): string {
+  const width = Math.max(...text.trimEnd().split("\n").map((line) => Bun.stringWidth(line)), 1);
+  return "━".repeat(width);
+}
+
 const quoteBar = { ...BorderChars.single, vertical: "▎" };
 
 export function markdownNode(renderer: CliRenderer): NonNullable<MarkdownOptions["renderNode"]> {
@@ -63,8 +68,17 @@ export function markdownNode(renderer: CliRenderer): NonNullable<MarkdownOptions
     if (token.type === "heading" && token.depth === 1) {
       const box = new BoxRenderable(renderer, { flexDirection: "column", width: "100%", flexShrink: 0 });
       const heading = context.defaultRender();
+      const rule = new TextRenderable(renderer, { content: ruleFor(token.text), fg: theme.quoll, wrapMode: "none", flexShrink: 0 });
+      if (heading instanceof CodeRenderable) {
+        const chunks = heading.onChunks;
+        heading.onChunks = async (drawn, context) => {
+          const shown = (await chunks?.(drawn, context)) ?? drawn;
+          rule.content = ruleFor(shown.map((chunk) => chunk.text).join(""));
+          return shown;
+        };
+      }
       if (heading) box.add(heading);
-      box.add(new TextRenderable(renderer, { content: "━".repeat(Math.max(Bun.stringWidth(token.text), 1)), fg: theme.quoll, wrapMode: "none", flexShrink: 0 }));
+      box.add(rule);
       return box;
     }
     if (token.type === "blockquote") {

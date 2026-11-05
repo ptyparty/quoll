@@ -33,6 +33,10 @@ export function keyMatches(spec: string, key: KeyEvent): boolean {
   return key.name === spec;
 }
 
+export function typedText(key: KeyEvent): string | undefined {
+  return !key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " " ? key.sequence : undefined;
+}
+
 export function keyName(spec: string): string {
   return names[spec]?.shown ?? spec;
 }

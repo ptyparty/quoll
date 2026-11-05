@@ -1,7 +1,7 @@
 import { BorderChars, BoxRenderable, TextRenderable, bg, bold, fg, type CliRenderer, type KeyEvent } from "@opentui/core";
 import { hintParts, partsWidth, styled, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
-import { bindingFor, type Binding } from "./keys.ts";
+import { bindingFor, typedText, type Binding } from "./keys.ts";
 
 export type PickerItem<T> = { label: string; detail?: string; mark?: boolean; indent?: number; value: T };
 
@@ -60,7 +60,8 @@ export const pickerBindings: Binding<PickerRun>[] = [
 export function pickerKey<T>(state: PickerState<T>, key: KeyEvent): PickerOutcome<T> {
   const binding = bindingFor(pickerBindings, key);
   if (binding?.run) return binding.run(state);
-  if (!key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " ") state.type(key.sequence);
+  const text = typedText(key);
+  if (text) state.type(text);
   return stay;
 }
 
