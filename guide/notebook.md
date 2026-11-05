@@ -6,6 +6,7 @@ Run `quoll path`; it prints the notebook folder, which is usually outside the st
 
 ## What goes in
 
+- `index.md`: a short summary of the work, then links to the other pages in short sections by subject, with a line on what each page holds. Keep a section to about eight links. When a subject outgrows that, give it its own index page (`komux-notebook.md`, or `remax/index.md` in a folder) and link that from `index.md` instead, so no list is too long to take in at a glance.
 - `plan.md`: the implementation plan. Update it as the plan changes rather than appending a history.
 - Mockups and screenshots as images, embedded in the page that discusses them.
 - Diagrams as mermaid blocks, wherever a picture explains it faster than prose: flows, state machines, sequences between processes, how components fit together. quoll draws them, so reach for them instead of ASCII art.
