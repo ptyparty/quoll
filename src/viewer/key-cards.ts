@@ -3,8 +3,6 @@ import { hintParts, partsWidth, styled, type Hint, type Part } from "../render/s
 import { theme } from "../render/theme.ts";
 import type { KeyGroup } from "./keys.ts";
 
-export type MenuGroup = { name: string; items: Hint[] };
-
 const columnGap = 4;
 const cardPadding = 4;
 
@@ -66,12 +64,12 @@ export class MenuView {
     this.box.destroyRecursively();
   }
 
-  render(title: string, groups: MenuGroup[] | undefined): void {
+  render(title: string, groups: KeyGroup[] | undefined): void {
     this.box.visible = groups !== undefined;
     if (!groups) return;
-    const keyWidth = Math.max(...groups.flatMap((group) => group.items.map(([key]) => Bun.stringWidth(key))), 1);
+    const keyWidth = Math.max(...groups.flatMap((group) => group.commands.map((command) => Bun.stringWidth(command.keys))), 1);
     const lines = joinColumns(
-      groups.map((group) => groupLines(group.name, group.items, keyWidth)),
+      groups.map((group) => groupLines(group.name, group.commands.map((command): Hint => [command.keys, command.label]), keyWidth)),
       columnGap,
     );
     this.heading.content = styled([bold(fg(theme.text)(title))]);

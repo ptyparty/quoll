@@ -1,7 +1,7 @@
 import type { KeyEvent } from "@opentui/core";
 import { headingKey, type Document } from "../document.ts";
 import type { Target } from "../notebook.ts";
-import { bindingFor, type Binding } from "./keys.ts";
+import { bindingFor, typedText, type Binding } from "./keys.ts";
 import { buildMindMap, layoutMindMap, pageTitle, previewRows, wrap, type MapNode, type MindMap } from "./mindmap.ts";
 
 export type NotebookPage = { page: string; document: Document; tags: string[] };
@@ -473,8 +473,9 @@ export function notebookMapKey(state: NotebookMapState, key: KeyEvent): Notebook
   if (state.filter !== undefined) {
     const binding = bindingFor(atlasFilterBindings, key);
     if (binding?.run) return binding.run(state);
-    if (key.ctrl || key.meta || key.sequence.length !== 1 || key.sequence < " ") return "none";
-    state.typeFilter(key.sequence);
+    const text = typedText(key);
+    if (!text) return "none";
+    state.typeFilter(text);
     return "move";
   }
   return bindingFor(atlasBindings, key)?.run?.(state) ?? "none";
