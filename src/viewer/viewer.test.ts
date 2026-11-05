@@ -155,11 +155,16 @@ describe("viewer", () => {
     frame = await settle(setup);
     expect(viewer.page).toBe("index.md");
     expect(frame).not.toContain("Rollout");
-    for (const name of ["a", "j", "l", "j", "a"]) setup.mockInput.pressKey(name);
+    for (const name of ["a", "j", "a"]) setup.mockInput.pressKey(name);
     frame = await settle(setup);
     expect(viewer.page).toBe("design/plan.md");
     expect(frame).not.toContain("Plan ›");
-    expect(frame).toContain("ship it carefully");
+    expect(frame).toContain("intro");
+    for (const name of ["a", "v"]) setup.mockInput.pressKey(name);
+    await settle(setup);
+    expect(viewer.page).toBe("design/plan.md");
+    setup.mockInput.pressEscape();
+    await settle(setup);
     setup.mockInput.pressKey("H", { shift: true });
     await settle(setup);
     expect(viewer.page).toBe("index.md");

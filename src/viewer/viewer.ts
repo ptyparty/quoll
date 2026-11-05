@@ -62,7 +62,7 @@ export class Viewer {
   private pageViews: Renderable[] = [];
   private blockViews: BoxRenderable[] = [];
   private markdownViews: (MarkdownRenderable | undefined)[] = [];
-  private marked: { view: MarkdownRenderable; text: string } | undefined;
+  private marked: { view: MarkdownRenderable; text: string; at: string } | undefined;
   private gaps: TextRenderable[] = [];
   private gutters: TextRenderable[] = [];
   private commenting: Commenting | undefined;
@@ -727,10 +727,11 @@ export class Viewer {
   }
 
   private mindMapKey(key: KeyEvent): void {
+    const before = this.mindMap!.choice.node;
     const outcome = notebookMapKey(this.mindMap!, key);
     if (outcome === "move") {
       this.mindMapView.render(this.mindMap);
-      this.followMap();
+      if (this.mindMap!.choice.node !== before) this.followMap();
       this.renderStatus();
     } else if (outcome === "land") {
       this.land();
@@ -744,6 +745,11 @@ export class Viewer {
   }
 
   private land(): void {
+    const node = this.mindMap?.choice.node;
+    if (node?.kind === "page" && node.where && node.where.page !== this.page) {
+      this.load(node.where.page);
+      this.scrollTo({ top: 0 });
+    }
     const back = this.mapReturn;
     const current = this.history.current;
     if (back && current && this.page && this.page !== back.page) {
@@ -797,6 +803,8 @@ export class Viewer {
   }
 
   private markLink(where: Where | undefined): void {
+    const at = where && where.page === this.page && where.column !== undefined ? `${where.line}:${where.column}` : undefined;
+    if (this.marked && this.marked.at === at) return;
     if (this.marked) {
       this.marked.view.content = this.marked.text;
       this.marked.view.syntaxStyle = this.style;
@@ -810,7 +818,7 @@ export class Viewer {
     const block = this.document.blocks[index];
     const marked = parseDocument(source, { line: where.line, column: where.column, length: where.length }).blocks.find((candidate) => candidate.startLine === block?.startLine);
     if (!view || marked?.kind !== "markdown") return;
-    this.marked = { view, text: view.content };
+    this.marked = { view, text: view.content, at: `${where.line}:${where.column}` };
     view.content = marked.text;
     view.syntaxStyle = this.markingStyle;
   }

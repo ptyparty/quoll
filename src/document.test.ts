@@ -97,6 +97,8 @@ describe("parseDocument", () => {
     const block = doc.blocks.find((candidate) => candidate.startLine === 2)!;
     expect(block.kind === "markdown" && block.text).toBe("See ~~the plan~~ and [notes](notes.md).");
     expect(doc.links.map((link) => link.column)).toEqual([4, 26]);
+    const stale = parseDocument("# T\n\nSee [[plan|the plan]] and [notes](notes.md).", { line: 2, column: 2, length: 17 }).blocks.find((candidate) => candidate.startLine === 2)!;
+    expect(stale.kind === "markdown" && stale.text).toBe("See **the plan** and [notes](notes.md).");
   });
 
   test("turns a mermaid fence into a diagram block and leaves other fences as markdown", () => {
