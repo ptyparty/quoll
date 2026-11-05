@@ -2,6 +2,7 @@
 import { createCliRenderer, type CliRenderer } from "@opentui/core";
 import { realpathSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import { systemClipboard } from "./clipboard.ts";
 import { listenForContext } from "./context.ts";
 import { hasTag } from "./document.ts";
 import { guideCommand } from "./guide.ts";
@@ -260,6 +261,7 @@ async function view(renderer: CliRenderer, root: string, follow: boolean): Promi
     follow,
     git: notebookGit(root),
     mermaid: new MermaidRenderer(mermaidCacheDir(), findChrome()),
+    clipboard: systemClipboard(),
     images: () => terminalImageOutput(renderer.capabilities?.kitty_graphics ?? false),
     edit: async (file, line) => {
       await renderer.suspend();

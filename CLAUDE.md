@@ -10,6 +10,7 @@ Default to using Bun instead of Node.js.
 - `src/document.ts`: parses a page (markdown with Obsidian links, embeds, and comments) into blocks, headings, and links, and reads its frontmatter tags.
 - `src/notebook.ts`: finds the notebook folder, lists pages, and resolves link and image targets.
 - `src/viewer/`: the OpenTUI viewer, its history, the picker, and the atlas (a navigable outline of the whole notebook).
+- `src/clipboard.ts`: copies an image file or text to the system clipboard through `wl-copy` or `xclip`, for `y` in the viewer.
 - `src/socket.ts`: the unix socket `quoll show` uses to reach running viewers.
 - `src/context.ts`: the socket komux asks for context on Alt shift c and for the keys that work right now (shared with kowari); `src/comment.ts` builds the context for a block.
 - `src/viewer/keys.ts`: key bindings. Each state's table sits beside the code it runs, and key handling, the `␣` menu, the `␣ ?` help sheet and the answer to komux all read those tables.
