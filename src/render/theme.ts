@@ -8,6 +8,7 @@ export const theme = {
   muted: "#868c9c",
   faint: "#4f5566",
   selection: "#283350",
+  match: "#41558c",
   quoll: "#e9b765",
   secondary: "#b99cf0",
   added: "#9fd07e",

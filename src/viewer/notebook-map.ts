@@ -1,6 +1,7 @@
 import type { KeyEvent } from "@opentui/core";
 import { headingKey, type Document } from "../document.ts";
 import type { Target } from "../notebook.ts";
+import { bindingFor, type Binding } from "./keys.ts";
 import { buildMindMap, layoutMindMap, pageTitle, previewRows, wrap, type MapNode, type MindMap } from "./mindmap.ts";
 
 export type NotebookPage = { page: string; document: Document; tags: string[] };
@@ -442,30 +443,39 @@ export class NotebookMapState {
 
 export type NotebookMapOutcome = "move" | "land" | "exit" | "none";
 
+type AtlasRun = (state: NotebookMapState) => NotebookMapOutcome;
+
+const moved = (change: () => void): NotebookMapOutcome => (change(), "move");
+
+export const atlasFilterBindings: Binding<AtlasRun>[] = [
+  { group: "Atlas filter", label: "filter", on: [], keys: "type" },
+  { group: "Atlas filter", label: "previous match", on: ["up", "^p"], run: (state) => moved(() => state.moveFilter(-1)) },
+  { group: "Atlas filter", label: "next match", on: ["down", "^n"], run: (state) => moved(() => state.moveFilter(1)) },
+  { group: "Atlas filter", label: "erase", on: ["backspace"], run: (state) => moved(() => state.eraseFilter()) },
+  { group: "Atlas filter", label: "go", on: ["return"], run: (state) => moved(() => state.acceptFilter()) },
+  { group: "Atlas filter", label: "cancel", on: ["escape"], run: (state) => moved(() => state.cancelFilter()) },
+];
+
+export const atlasBindings: Binding<AtlasRun>[] = [
+  { group: "Atlas", label: "out", on: ["h", "left"], run: (state) => moved(() => state.out()) },
+  { group: "Atlas", label: "next", on: ["j", "down"], run: (state) => moved(() => state.sideways(1)) },
+  { group: "Atlas", label: "previous", on: ["k", "up"], run: (state) => moved(() => state.sideways(-1)) },
+  { group: "Atlas", label: "in", on: ["l", "right"], run: (state) => moved(() => state.in()) },
+  { group: "Atlas", label: "back", on: ["backspace", "H"], run: (state) => (state.back() ? "move" : "none") },
+  { group: "Atlas", label: "follow the link", on: ["return"], run: (state) => (state.warp() ? "move" : "land") },
+  { group: "Atlas", label: "filter", on: ["/"], menu: "/", run: (state) => moved(() => state.startFilter()) },
+  { group: "Atlas", label: "columns or map", on: ["v"], menu: "v", run: (state) => moved(() => state.toggleView()) },
+  { group: "Atlas", label: "land on the page", on: ["a"], menu: "a", run: () => "land" },
+  { group: "Atlas", label: "leave the atlas", on: ["escape", "q", "^c"], run: () => "exit" },
+];
+
 export function notebookMapKey(state: NotebookMapState, key: KeyEvent): NotebookMapOutcome {
   if (state.filter !== undefined) {
-    if (key.name === "escape") state.cancelFilter();
-    else if (key.name === "return") state.acceptFilter();
-    else if (key.name === "backspace") state.eraseFilter();
-    else if (key.name === "up" || (key.ctrl && key.name === "p")) state.moveFilter(-1);
-    else if (key.name === "down" || (key.ctrl && key.name === "n")) state.moveFilter(1);
-    else if (!key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " ") state.typeFilter(key.sequence);
-    else return "none";
+    const binding = bindingFor(atlasFilterBindings, key);
+    if (binding?.run) return binding.run(state);
+    if (key.ctrl || key.meta || key.sequence.length !== 1 || key.sequence < " ") return "none";
+    state.typeFilter(key.sequence);
     return "move";
   }
-  if (key.sequence === "/") {
-    state.startFilter();
-    return "move";
-  }
-  if (key.name === "escape" || key.name === "q" || (key.ctrl && key.name === "c")) return "exit";
-  if (key.name === "a") return "land";
-  if (key.name === "return") return state.warp() ? "move" : "land";
-  if (key.name === "backspace" || (key.name === "h" && key.shift)) return state.back() ? "move" : "none";
-  if (key.name === "v") state.toggleView();
-  else if (key.name === "h" || key.name === "left") state.out();
-  else if (key.name === "l" || key.name === "right") state.in();
-  else if (key.name === "j" || key.name === "down") state.sideways(1);
-  else if (key.name === "k" || key.name === "up") state.sideways(-1);
-  else return "none";
-  return "move";
+  return bindingFor(atlasBindings, key)?.run?.(state) ?? "none";
 }

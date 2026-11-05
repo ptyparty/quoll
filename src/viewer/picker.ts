@@ -1,6 +1,7 @@
 import { BorderChars, BoxRenderable, TextRenderable, bg, bold, fg, type CliRenderer, type KeyEvent } from "@opentui/core";
 import { hintParts, partsWidth, styled, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
+import { bindingFor, type Binding } from "./keys.ts";
 
 export type PickerItem<T> = { label: string; detail?: string; mark?: boolean; indent?: number; value: T };
 
@@ -41,16 +42,26 @@ export class PickerState<T> {
 
 export type PickerOutcome<T> = { done: true; value: T | undefined } | { done: false };
 
+type PickerRun = <T>(state: PickerState<T>) => PickerOutcome<T>;
+
+const stay = { done: false } as const;
+
+export const pickerBindings: Binding<PickerRun>[] = [
+  { group: "Pickers", label: "filter", on: [], keys: "type" },
+  { group: "Pickers", label: "previous", on: ["up", "^p"], run: (state) => (state.move(-1), stay) },
+  { group: "Pickers", label: "next", on: ["down", "^n"], run: (state) => (state.move(1), stay) },
+  { group: "Pickers", label: "ten up", on: ["pageup"], run: (state) => (state.move(-10), stay) },
+  { group: "Pickers", label: "ten down", on: ["pagedown"], run: (state) => (state.move(10), stay) },
+  { group: "Pickers", label: "erase", on: ["backspace"], run: (state) => (state.erase(), stay) },
+  { group: "Pickers", label: "open", on: ["return"], run: (state) => ({ done: true, value: state.choice }) },
+  { group: "Pickers", label: "close", on: ["escape", "^c"], run: () => ({ done: true, value: undefined }) },
+];
+
 export function pickerKey<T>(state: PickerState<T>, key: KeyEvent): PickerOutcome<T> {
-  if (key.name === "escape" || (key.ctrl && key.name === "c")) return { done: true, value: undefined };
-  if (key.name === "return") return { done: true, value: state.choice };
-  if (key.name === "up" || (key.ctrl && key.name === "p")) state.move(-1);
-  else if (key.name === "down" || (key.ctrl && key.name === "n")) state.move(1);
-  else if (key.name === "pageup") state.move(-10);
-  else if (key.name === "pagedown") state.move(10);
-  else if (key.name === "backspace") state.erase();
-  else if (!key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " ") state.type(key.sequence);
-  return { done: false };
+  const binding = bindingFor(pickerBindings, key);
+  if (binding?.run) return binding.run(state);
+  if (!key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " ") state.type(key.sequence);
+  return stay;
 }
 
 export class PickerView {

@@ -279,7 +279,7 @@ async function view(renderer: CliRenderer, root: string, follow: boolean): Promi
     renderer.requestRender();
     return reply;
   });
-  const stopContext = listenForContext((request) => viewer.askForContext(request));
+  const stopContext = listenForContext({ context: (request) => viewer.askForContext(request), keys: () => viewer.keys() });
   const signals = ["SIGHUP", "SIGTERM", "SIGINT"] as const;
   const onSignal = () => viewer.close();
   for (const signal of signals) process.on(signal, onSignal);

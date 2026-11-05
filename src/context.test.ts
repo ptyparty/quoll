@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { contextSocket, listenForContext, type ContextRequest } from "./context.ts";
 
 const cleanups: (() => void)[] = [];
+const noKeys = () => ({ app: "quoll", groups: [] });
 
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
@@ -56,7 +57,7 @@ describe("the context socket", () => {
   test("hands komux what the app attaches after it picks", async () => {
     const env = tabEnv();
     let asked: ContextRequest | undefined;
-    const stop = listenForContext((request) => (asked = request), env);
+    const stop = listenForContext({ context: (request) => (asked = request), keys: noKeys }, env);
     cleanups.push(stop);
     const client = komux(contextSocket(env)!);
     await client.send({ context: 1 });
@@ -71,7 +72,7 @@ describe("the context socket", () => {
   test("tells the app when komux cancels", async () => {
     const env = tabEnv();
     let cancelled = 0;
-    cleanups.push(listenForContext((request) => request.onCancel(() => cancelled++), env));
+    cleanups.push(listenForContext({ context: (request) => request.onCancel(() => cancelled++), keys: noKeys }, env));
     const client = komux(contextSocket(env)!);
     await client.send({ context: 1 });
     await client.send({ cancel: true });
@@ -82,7 +83,7 @@ describe("the context socket", () => {
   test("tells the app when komux hangs up", async () => {
     const env = tabEnv();
     let cancelled = 0;
-    cleanups.push(listenForContext((request) => request.onCancel(() => cancelled++), env));
+    cleanups.push(listenForContext({ context: (request) => request.onCancel(() => cancelled++), keys: noKeys }, env));
     const client = komux(contextSocket(env)!);
     await client.send({ context: 1 });
     await Bun.sleep(10);
@@ -91,9 +92,21 @@ describe("the context socket", () => {
     expect(cancelled).toBe(1);
   });
 
+  test("answers komux's keys question with one line and hangs up", async () => {
+    const env = tabEnv();
+    let asked = 0;
+    const keys = { app: "quoll", groups: [{ name: "Go", commands: [{ label: "find page", keys: "p ␣f", send: "p" }] }] };
+    cleanups.push(listenForContext({ context: () => asked++, keys: () => keys }, env));
+    const client = komux(contextSocket(env)!);
+    await client.send({ keys: 1 });
+    await until(client.closed);
+    expect(client.lines).toEqual([{ keys }]);
+    expect(asked).toBe(0);
+  });
+
   test("removes the socket when it stops", () => {
     const env = tabEnv();
-    const stop = listenForContext(() => {}, env);
+    const stop = listenForContext({ context: () => {}, keys: noKeys }, env);
     expect(existsSync(contextSocket(env)!)).toBe(true);
     stop();
     expect(existsSync(contextSocket(env)!)).toBe(false);
