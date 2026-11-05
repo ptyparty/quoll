@@ -99,7 +99,9 @@ export function buildNotebookTree(pages: NotebookPage[], resolve: (from: string,
           const target = child.where.page;
           if (parent.get(target) === name && !placed.has(target) && child.where.anchor === undefined && (child.lead || !leads.has(target))) {
             placed.add(target);
-            return pageNode(target);
+            const page = pageNode(target);
+            if (child.source) page.source = child.source;
+            return page;
           }
           return { ...child, kind: "portal", owner: name };
         }
@@ -112,7 +114,10 @@ export function buildNotebookTree(pages: NotebookPage[], resolve: (from: string,
     for (const target of outgoing.get(name)!) {
       if (parent.get(target) === name && !placed.has(target)) {
         placed.add(target);
-        node.children.push(pageNode(target));
+        const page = pageNode(target);
+        const link = info.document.links.find((candidate) => resolve(name, candidate.target)?.page === target);
+        if (link) page.source = { page: name, line: link.line, column: link.column, length: link.length };
+        node.children.push(page);
       }
     }
     const from = incoming.get(name)!.filter((other) => other !== parent.get(name));
@@ -121,7 +126,7 @@ export function buildNotebookTree(pages: NotebookPage[], resolve: (from: string,
         const document = byPage.get(other)!.document;
         const link = document.links.find((candidate) => resolve(other, candidate.target)?.page === name);
         const heading = link ? document.headings.findLast((candidate) => candidate.line <= link.line && candidate.level > 1) : undefined;
-        return { label: heading ? `${titleOf(other)} › ${heading.text}` : titleOf(other), kind: "portal", where: link ? { page: other, line: link.line } : { page: other }, children: [], owner: name, back: true, detail: stem(other) };
+        return { label: heading ? `${titleOf(other)} › ${heading.text}` : titleOf(other), kind: "portal", where: link ? { page: other, line: link.line, column: link.column, length: link.length } : { page: other }, children: [], owner: name, back: true, detail: stem(other) };
       });
       node.children.push({ label: `linked from (${from.length})`, kind: "group", where: undefined, children: portals, owner: name });
     }
@@ -131,6 +136,7 @@ export function buildNotebookTree(pages: NotebookPage[], resolve: (from: string,
       const portals = others.map((other): MapNode => ({ label: titleOf(other), kind: "portal", where: { page: other }, children: [], owner: name, detail: stem(other) }));
       node.children.push({ label: `#${tag} (${others.length})`, kind: "tag", where: undefined, children: portals, owner: name });
     }
+    node.children.unshift({ label: "top of page", kind: "top", where: { page: name, line: 0 }, children: [], owner: name });
     pageNodes.set(name, node);
     return node;
   };
@@ -179,7 +185,7 @@ function portalTarget(tree: Pick<NotebookTree, "pages">, node: MapNode): MapNode
 export function previewLines(tree: NotebookTree, node: MapNode): string[] {
   const where = node.where;
   const document = where ? tree.documents.get(where.page) : undefined;
-  if (!where || !document || (node.kind !== "heading" && node.kind !== "page" && node.kind !== "root")) return [];
+  if (!where || !document || (node.kind !== "heading" && node.kind !== "page" && node.kind !== "top" && node.kind !== "root")) return [];
   const from = where.line ?? 0;
   const end = document.headings.find((heading) => heading.line > from && (node.kind === "heading" || heading.level > 1))?.line ?? Infinity;
   return document.blocks

@@ -10,7 +10,9 @@ export type Resolution = "ours" | "theirs" | "both";
 
 export type Heading = { level: number; text: string; line: number };
 
-export type Link = { label: string; target: string; line: number; lead: boolean };
+export type Link = { label: string; target: string; line: number; column: number; length: number; lead: boolean };
+
+export type Span = { line: number; column: number; length: number };
 
 export type Document = { blocks: Block[]; headings: Heading[]; links: Link[] };
 
@@ -23,7 +25,7 @@ const wikiLink = /(!?)\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
 const listLead = /^\s*(?:[-*+]|\d+[.)])\s+$/;
 const markdownLink = /(?<!!)\[([^\]]+)\]\(<?([^)>\s]+)>?(?:\s+"[^"]*")?\)/g;
 
-export function parseDocument(source: string): Document {
+export function parseDocument(source: string, mark?: Span): Document {
   const lines = source.split(/\r?\n/);
   const blocks: Block[] = [];
   const headings: Heading[] = [];
@@ -79,7 +81,7 @@ export function parseDocument(source: string): Document {
     }
     const stripped = stripComments(raw, inComment);
     inComment = stripped.inComment;
-    const line = stripped.text;
+    const line = mark?.line === index ? markSpan(stripped.text, mark) : stripped.text;
     if (stripped.removed && line.trim() === "") continue;
 
     const embed = wikiEmbedLine.exec(line);
@@ -99,7 +101,7 @@ export function parseDocument(source: string): Document {
       flush();
       headings.push({ level: headingMatch[1]!.length, text: headingMatch[2]!, line: index });
     }
-    links.push(...linksIn(line, index));
+    links.push(...linksIn(stripped.text, index));
     append(rewriteWikiLinks(line), index);
   }
   flush();
@@ -200,15 +202,21 @@ function stripComments(line: string, inComment: boolean): { text: string; inComm
 
 function linksIn(line: string, index: number): Link[] {
   const found: Link[] = [];
-  const leads = (at: number) => listLead.test(line.slice(0, at));
+  const leads = (at: number, length: number) => listLead.test(line.slice(0, at)) || (/\|\s*$/.test(line.slice(0, at)) && /^\s*\|/.test(line.slice(at + length)));
   for (const match of line.matchAll(wikiLink)) {
     const target = match[2]!.trim();
-    found.push({ label: match[3]?.trim() || target, target, line: index, lead: leads(match.index) });
+    found.push({ label: match[3]?.trim() || target, target, line: index, column: match.index, length: match[0].length, lead: leads(match.index, match[0].length) });
   }
   for (const match of line.matchAll(markdownLink)) {
-    found.push({ label: match[1]!, target: decodeTarget(match[2]!), line: index, lead: leads(match.index) });
+    found.push({ label: match[1]!, target: decodeTarget(match[2]!), line: index, column: match.index, length: match[0].length, lead: leads(match.index, match[0].length) });
   }
   return found;
+}
+
+function markSpan(line: string, span: Span): string {
+  const end = span.column + span.length;
+  const label = linksIn(line, span.line).find((link) => link.column === span.column)?.label ?? line.slice(span.column, end);
+  return `${line.slice(0, span.column)}~~${label}~~${line.slice(end)}`;
 }
 
 function rewriteWikiLinks(line: string): string {

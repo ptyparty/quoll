@@ -5,12 +5,13 @@ import type { Target } from "../notebook.ts";
 import { styled, type Part } from "../render/styled.ts";
 import { theme } from "../render/theme.ts";
 
-export type Where = { page: string; line?: number; anchor?: string };
+export type Where = { page: string; line?: number; anchor?: string; column?: number; length?: number };
 
 export type MapNode = {
   label: string;
-  kind: "root" | "page" | "heading" | "link" | "anchor" | "portal" | "tag" | "group" | "text";
+  kind: "root" | "page" | "top" | "heading" | "link" | "anchor" | "portal" | "tag" | "group" | "text";
   where: Where | undefined;
+  source?: Where;
   children: MapNode[];
   left?: boolean;
   owner?: string;
@@ -68,7 +69,7 @@ export function buildMindMap(page: string | undefined, document: Document, resol
     if (keys.has(key)) continue;
     keys.add(key);
     const local = target.page === page;
-    attach(owner, link.line, { label: link.label, kind: local ? "anchor" : "link", where: { page: target.page, ...(target.anchor ? { anchor: target.anchor } : {}) }, children: [], ...(link.lead ? { lead: true } : {}) });
+    attach(owner, link.line, { label: link.label, kind: local ? "anchor" : "link", where: { page: target.page, ...(target.anchor ? { anchor: target.anchor } : {}) }, children: [], ...(page ? { source: { page, line: link.line, column: link.column, length: link.length } } : {}), ...(link.lead ? { lead: true } : {}) });
   }
   for (const [owner, list] of children) owner.children = list.sort((a, b) => a.line - b.line).map((entry) => entry.node);
   return root;
@@ -214,7 +215,7 @@ function junction(up: boolean, down: boolean, left: boolean, right: boolean): st
 
 function nodeText(node: MapNode, limit = maxLabel): string {
   if (node.kind === "text") return ` ${node.label} `;
-  const prefix = node.kind === "portal" ? (node.back ? "↩ " : "⤳ ") : node.kind === "link" ? "↗ " : node.kind === "anchor" ? "→ " : "";
+  const prefix = node.kind === "portal" ? (node.back ? "↩ " : "⤳ ") : node.kind === "link" ? "↗ " : node.kind === "anchor" ? "→ " : node.kind === "top" ? "↑ " : "";
   return ` ${prefix}${truncate(plain(node.label), limit)} `;
 }
 
@@ -524,7 +525,7 @@ export function wrap(text: string, size: number): string[] {
 }
 
 function columnLabel(node: MapNode): string {
-  const prefix = node.kind === "portal" ? (node.back ? "↩ " : "⤳ ") : node.kind === "anchor" ? "→ " : node.kind === "page" ? "▤ " : "";
+  const prefix = node.kind === "portal" ? (node.back ? "↩ " : "⤳ ") : node.kind === "anchor" ? "→ " : node.kind === "page" ? "▤ " : node.kind === "top" ? "↑ " : "";
   return `${prefix}${plain(node.label)}${node.children.length > 0 ? " ›" : ""}`;
 }
 
