@@ -1,13 +1,16 @@
-import { Lexer } from "marked";
+import { Lexer, type Tokens } from "marked";
 
 export type Block =
-  | { kind: "markdown"; text: string; startLine: number; endLine: number }
+  | { kind: "markdown"; text: string; startLine: number; endLine: number; list?: number }
   | { kind: "image"; target: string; alt: string; startLine: number; endLine: number }
-  | { kind: "mermaid"; source: string; startLine: number; endLine: number };
+  | { kind: "mermaid"; source: string; startLine: number; endLine: number }
+  | { kind: "conflict"; ours: string; theirs: string; oursLabel: string; theirsLabel: string; startLine: number; endLine: number };
+
+export type Resolution = "ours" | "theirs" | "both";
 
 export type Heading = { level: number; text: string; line: number };
 
-export type Link = { label: string; target: string; line: number };
+export type Link = { label: string; target: string; line: number; lead: boolean };
 
 export type Document = { blocks: Block[]; headings: Heading[]; links: Link[] };
 
@@ -17,6 +20,7 @@ const heading = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
 const wikiEmbedLine = /^\s*!\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]\s*$/;
 const markdownImageLine = /^\s*!\[([^\]]*)\]\(<?([^)>\s]+)>?(?:\s+"[^"]*")?\)\s*$/;
 const wikiLink = /(!?)\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
+const listLead = /^\s*(?:[-*+]|\d+[.)])\s+$/;
 const markdownLink = /(?<!!)\[([^\]]+)\]\(<?([^)>\s]+)>?(?:\s+"[^"]*")?\)/g;
 
 export function parseDocument(source: string): Document {
@@ -44,6 +48,20 @@ export function parseDocument(source: string): Document {
       append(raw, index);
       if (raw.trim().startsWith(openFence)) openFence = undefined;
       continue;
+    }
+    const opening = inComment ? null : /^(<{7,})(?: |$)/.exec(raw);
+    if (opening) {
+      const size = opening[1]!.length;
+      const is = (candidate: string, char: string) => candidate.startsWith(char.repeat(size)) && (candidate.length === size || candidate[size] === " ");
+      const middle = lines.findIndex((candidate, at) => at > index && is(candidate, "="));
+      const end = middle === -1 ? -1 : lines.findIndex((candidate, at) => at > middle && is(candidate, ">"));
+      if (end !== -1) {
+        const base = lines.findIndex((candidate, at) => at > index && at < middle && is(candidate, "|"));
+        flush();
+        blocks.push({ kind: "conflict", ours: lines.slice(index + 1, base === -1 ? middle : base).join("\n"), theirs: lines.slice(middle + 1, end).join("\n"), oursLabel: raw.slice(size).trim(), theirsLabel: lines[end]!.slice(size).trim(), startLine: index, endLine: end });
+        index = end;
+        continue;
+      }
     }
     const fenceMatch = fence.exec(raw);
     if (fenceMatch && !inComment && raw.slice(fenceMatch[0].length).trim() === "mermaid") {
@@ -96,9 +114,21 @@ function markdownBlocks(lines: string[], sourceLines: number[]): Block[] {
     line += newlines(token.raw);
     const raw = token.raw.trimEnd();
     if (token.type === "space" || raw.trim() === "") continue;
-    const first = Math.min(start + newlines(token.raw.slice(0, token.raw.length - token.raw.trimStart().length)), lines.length - 1);
-    const last = Math.min(start + newlines(raw), lines.length - 1);
-    blocks.push({ kind: "markdown", text: lines.slice(first, last + 1).join("\n"), startLine: sourceLines[first]!, endLine: sourceLines[last]! });
+    const span = (from: number, text: string) => {
+      const first = Math.min(from + newlines(text.slice(0, text.length - text.trimStart().length)), lines.length - 1);
+      const last = Math.min(from + newlines(text.trimEnd()), lines.length - 1);
+      return { text: lines.slice(first, last + 1).join("\n"), startLine: sourceLines[first]!, endLine: sourceLines[last]! };
+    };
+    if (token.type === "list") {
+      let at = start;
+      const list = sourceLines[Math.min(start, lines.length - 1)]!;
+      for (const item of (token as Tokens.List).items) {
+        if (item.raw.trim() !== "") blocks.push({ kind: "markdown", ...span(at, item.raw), list });
+        at += newlines(item.raw);
+      }
+      continue;
+    }
+    blocks.push({ kind: "markdown", ...span(start, token.raw) });
   }
   return blocks;
 }
@@ -170,12 +200,13 @@ function stripComments(line: string, inComment: boolean): { text: string; inComm
 
 function linksIn(line: string, index: number): Link[] {
   const found: Link[] = [];
+  const leads = (at: number) => listLead.test(line.slice(0, at));
   for (const match of line.matchAll(wikiLink)) {
     const target = match[2]!.trim();
-    found.push({ label: match[3]?.trim() || target, target, line: index });
+    found.push({ label: match[3]?.trim() || target, target, line: index, lead: leads(match.index) });
   }
   for (const match of line.matchAll(markdownLink)) {
-    found.push({ label: match[1]!, target: decodeTarget(match[2]!), line: index });
+    found.push({ label: match[1]!, target: decodeTarget(match[2]!), line: index, lead: leads(match.index) });
   }
   return found;
 }
@@ -264,5 +295,14 @@ export function diffBlocks(before: Block[], after: Block[]): BlockChanges {
 function blockKey(block: Block): string {
   if (block.kind === "markdown") return `markdown\n${block.text}`;
   if (block.kind === "image") return `image\n${block.target}\n${block.alt}`;
+  if (block.kind === "conflict") return `conflict\n${block.ours}\n${block.theirs}`;
   return `mermaid\n${block.source}`;
+}
+
+export function resolveConflict(source: string, block: Extract<Block, { kind: "conflict" }>, resolution: Resolution): string {
+  const ending = source.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.split(/\r?\n/);
+  const kept = resolution === "ours" ? [block.ours] : resolution === "theirs" ? [block.theirs] : [block.ours, block.theirs];
+  const replacement = kept.filter((side) => side !== "").flatMap((side) => side.split("\n"));
+  return [...lines.slice(0, block.startLine), ...replacement, ...lines.slice(block.endLine + 1)].join(ending);
 }

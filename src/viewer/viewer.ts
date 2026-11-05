@@ -1,7 +1,7 @@
 import { BorderChars, BoxRenderable, MarkdownRenderable, MouseButton, ScrollBoxRenderable, TextRenderable, bold, fg, type CliRenderer, type KeyEvent, type Renderable, type SyntaxStyle } from "@opentui/core";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument, type Block, type Document } from "../document.ts";
+import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument, resolveConflict, type Block, type Document, type Resolution } from "../document.ts";
 import { imageIdColor, placeholderLines, type ImageOutput } from "../render/image.ts";
 import { markdownStyle, sendImage } from "../render/markdown.ts";
 import type { MermaidRenderer } from "../render/mermaid.ts";
@@ -10,9 +10,12 @@ import { theme } from "../render/theme.ts";
 import { contains, indexPage, listFiles, listPages, overlaps, pagesByTag, readPage, resolveAsset, resolveTarget } from "../notebook.ts";
 import { commentContext } from "../comment.ts";
 import type { ContextRequest } from "../context.ts";
+import type { GitStatus, NotebookGit } from "../git.ts";
 import type { Reply } from "../socket.ts";
 import { History } from "./history.ts";
 import { PickerState, PickerView, pickerKey, type PickerItem } from "./picker.ts";
+import { MindMapView, type Where } from "./mindmap.ts";
+import { NotebookMapState, buildNotebookTree, notebookMapKey } from "./notebook-map.ts";
 
 export type ViewerOptions = {
   root: string;
@@ -20,9 +23,12 @@ export type ViewerOptions = {
   edit: (file: string, line: number) => Promise<void>;
   follow: boolean;
   mermaid?: MermaidRenderer;
+  git?: NotebookGit;
 };
 
 type Picker = { state: PickerState<() => void> };
+type Section = { first: number; last: number };
+type ScrollTarget = { line: number } | { top: number } | { centre: Section };
 type BlockFrame = { frame: BoxRenderable; gutter: TextRenderable };
 type PageMarks = { changed: Set<number>; removed: Set<number> };
 type Commenting = { selected: number; hints: Map<string, number>; top: number | undefined; settleFrames: number };
@@ -35,11 +41,15 @@ const hintLetters = "asdfghlzxcvbnmertyuiopw";
 const barChars = { ...BorderChars.single, vertical: "▎" };
 const noBarChars = { ...BorderChars.single, vertical: " " };
 const seenDelayFrames = 2;
+const dimmedOpacity = 0.45;
+const gitPollMs = 30_000;
+const gitSettleMs = 2_000;
 
 export class Viewer {
   private readonly scroll: ScrollBoxRenderable;
   private readonly status: TextRenderable;
   private readonly pickerView: PickerView;
+  private readonly mindMapView: MindMapView;
   private readonly style: SyntaxStyle;
   private readonly history = new History();
   private readonly known = new Map<string, string>();
@@ -55,8 +65,14 @@ export class Viewer {
   private commenting: Commenting | undefined;
   private asking: ContextRequest | undefined;
   private picker: Picker | undefined;
+  private mindMap: NotebookMapState | undefined;
+  private mapFocused = true;
+  private refocusMap = false;
+  private mapReturn: { page: string | undefined; top: number } | undefined;
+  private section: Section | undefined;
+  private endPad: TextRenderable | undefined;
   private following: boolean;
-  private pendingScroll: { line: number } | { top: number } | undefined;
+  private pendingScroll: ScrollTarget | undefined;
   private settleFrames = 0;
   private seenFrames = 0;
   private shown: string | undefined;
@@ -65,6 +81,12 @@ export class Viewer {
   private message: { text: string; until: number } | undefined;
   private editing = false;
   private closed: () => void = () => {};
+  private gitStatus: GitStatus | undefined;
+  private conflictAt: number | undefined;
+  private gitTicket = 0;
+  private pushing = false;
+  private gitTimer: ReturnType<typeof setInterval> | undefined;
+  private gitSoon: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly renderer: CliRenderer,
@@ -83,6 +105,7 @@ export class Viewer {
       },
     });
     this.status = new TextRenderable(renderer, { height: 1, wrapMode: "none", flexShrink: 0 });
+    this.mindMapView = new MindMapView(renderer, frame);
     frame.add(this.scroll);
     frame.add(this.status);
     renderer.root.add(frame);
@@ -108,6 +131,11 @@ export class Viewer {
 
   start(): void {
     this.visit(existsSync(join(this.options.root, indexPage)) ? indexPage : undefined);
+    if (this.options.git) {
+      void this.refreshGit();
+      this.gitTimer = setInterval(() => void this.refreshGit(), gitPollMs);
+      this.gitTimer.unref?.();
+    }
   }
 
   show(target: string, notebook = this.options.root): Reply {
@@ -122,13 +150,144 @@ export class Viewer {
       this.pendingShow = { target, notebook };
       return { ok: true };
     }
+    if (this.mindMap) this.closeMindMap();
     const page = relative(root, file);
     this.stopFollowing();
     const found = this.visit(page, resolved.anchor);
     return found ? { ok: true } : { error: `Showing ${page}, but it has no heading ${resolved.anchor}` };
   }
 
+  async refreshGit(during = false): Promise<void> {
+    const git = this.options.git;
+    if (!git || (this.pushing && !during)) return;
+    const ticket = ++this.gitTicket;
+    let status: GitStatus | undefined;
+    try {
+      status = await git.status();
+    } catch {
+      return;
+    }
+    if (ticket !== this.gitTicket || JSON.stringify(status) === JSON.stringify(this.gitStatus)) return;
+    const started = status?.merging && !this.gitStatus?.merging && this.gitStatus !== undefined;
+    this.gitStatus = status;
+    if (started && !this.pushing) this.showConflicts(status!.conflicts);
+    this.renderStatus();
+    this.renderer.requestRender();
+  }
+
+  private async sync(): Promise<void> {
+    const git = this.options.git;
+    if (!git || this.pushing) return;
+    this.pushing = true;
+    this.flash(this.gitStatus?.merging ? "Finishing the merge…" : "Syncing the notebook…");
+    this.renderer.requestRender();
+    try {
+      const result = await git.sync();
+      await this.refreshGit(true);
+      if ("error" in result) this.flash(`Sync failed: ${result.error}`);
+      else if ("conflicts" in result) this.showConflicts(result.conflicts);
+      else this.flash(result.pushed === 0 ? "Nothing to push" : `Pushed ${commits(result.pushed)}`);
+    } catch (error) {
+      this.flash(`Sync failed: ${(error as Error).message}`);
+    } finally {
+      this.pushing = false;
+    }
+    if (this.page) this.reload();
+    this.renderer.requestRender();
+  }
+
+  private showConflicts(pages: string[]): void {
+    const elsewhere = this.gitStatus?.elsewhere ?? [];
+    this.flash(`Merge conflicts in ${count(pages.length + elsewhere.length, "file")} · n next conflict · 1 yours · 2 theirs · b both · e edit · P finish · X abort`);
+    const here = pages.map((page): PickerItem<() => void> => ({ label: page, detail: "in this notebook", value: () => this.navigate(page) }));
+    const outside = elsewhere.map((file): PickerItem<() => void> => ({ label: file, detail: "outside this notebook · Enter opens it in your editor", mark: true, value: () => void this.editElsewhere(file) }));
+    if (here.length + outside.length === 0) return;
+    const title = outside.length > 0 ? `Merge conflicts · ${count(outside.length, "file")} outside this notebook must be settled too before P can finish` : "Merge conflicts";
+    this.openPicker(title, [...here, ...outside]);
+  }
+
+  private async editElsewhere(file: string): Promise<void> {
+    let line = 1;
+    try {
+      line = readFileSync(file, "utf8").split("\n").findIndex((text) => text.startsWith("<<<<<<<")) + 1 || 1;
+    } catch {}
+    this.editing = true;
+    try {
+      await this.options.edit(file, line);
+    } catch (error) {
+      this.flash(`Could not edit: ${(error as Error).message}`);
+    } finally {
+      this.editing = false;
+    }
+    this.applyDeferred();
+    await this.refreshGit();
+    this.renderer.requestRender();
+  }
+
+  private async abortMerge(): Promise<void> {
+    const git = this.options.git;
+    if (!git || !this.gitStatus?.merging) return;
+    const error = await git.abort();
+    this.flash(error ? `Abort failed: ${error}` : "Merge aborted");
+    await this.refreshGit();
+    if (this.page) this.reload();
+    this.renderer.requestRender();
+  }
+
+  private conflicts(): number[] {
+    return this.document.blocks.flatMap((block, index) => (block.kind === "conflict" ? [index] : []));
+  }
+
+  private nextConflict(delta: number): void {
+    const all = this.conflicts();
+    if (all.length === 0) return this.flash("No conflicts on this page");
+    const at = this.conflictAt === undefined ? -1 : all.indexOf(this.conflictAt);
+    const next = all[(at + delta + all.length) % all.length]!;
+    this.selectConflict(next);
+  }
+
+  private selectConflict(index: number | undefined): void {
+    const previous = this.conflictAt === undefined ? undefined : this.blockViews[this.conflictAt];
+    if (previous) previous.backgroundColor = "transparent";
+    this.conflictAt = index;
+    const view = index === undefined ? undefined : this.blockViews[index];
+    if (!view || index === undefined) return;
+    view.backgroundColor = theme.surface;
+    this.stopFollowing();
+    this.scrollTo({ line: this.document.blocks[index]!.startLine });
+  }
+
+  private settleConflict(resolution: Resolution): void {
+    const page = this.page;
+    const visible = this.visibleBlocks();
+    const index = this.conflictAt ?? this.conflicts().find((candidate) => visible.includes(candidate));
+    const block = index === undefined ? undefined : this.document.blocks[index];
+    if (!page || index === undefined || !block || block.kind !== "conflict") return this.flash("No conflict selected · n finds one");
+    const file = join(this.options.root, page);
+    const fresh = readFileSync(file, "utf8");
+    const ordinal = this.conflicts().indexOf(index);
+    const current = parseDocument(fresh).blocks.filter((candidate) => candidate.kind === "conflict")[ordinal];
+    if (!current || current.kind !== "conflict" || current.ours !== block.ours || current.theirs !== block.theirs) {
+      this.reload();
+      return this.flash("The page changed on disk · check the conflict and press again");
+    }
+    writeFileSync(file, resolveConflict(fresh, current, resolution));
+    this.reload();
+    const left = this.conflicts();
+    const next = left.find((candidate) => candidate >= index) ?? left[0];
+    if (next !== undefined) this.selectConflict(next);
+    else {
+      this.conflictAt = undefined;
+      this.flash("No conflicts left on this page · P finishes the merge once every page is settled");
+    }
+    void this.refreshGit();
+  }
+
   fileChanged(path: string): void {
+    if (this.options.git) {
+      clearTimeout(this.gitSoon);
+      this.gitSoon = setTimeout(() => void this.refreshGit(), gitSettleMs);
+    }
     if (this.editing) {
       this.deferred.add(path);
       return;
@@ -162,6 +321,8 @@ export class Viewer {
   }
 
   close(): void {
+    clearInterval(this.gitTimer);
+    clearTimeout(this.gitSoon);
     this.renderer.keyInput.off("keypress", this.onKey);
     this.closed();
   }
@@ -222,7 +383,7 @@ export class Viewer {
     if (current && current.page === this.shown) current.scroll = this.scroll.scrollTop;
   }
 
-  private scrollTo(target: { line: number } | { top: number }): void {
+  private scrollTo(target: ScrollTarget): void {
     this.pendingScroll = target;
     this.settleFrames = 3;
     this.renderer.requestRender();
@@ -266,9 +427,13 @@ export class Viewer {
     this.blockViews = frames.map(({ frame }) => frame);
     this.gutters = frames.map(({ gutter }) => gutter);
     this.gaps = Array.from({ length: frames.length + 1 }, () => new TextRenderable(this.renderer, { content: "", height: 0, flexShrink: 0, wrapMode: "none" }));
-    this.pageViews = this.gaps.flatMap((gap, index) => [gap, ...this.blockViews.slice(index, index + 1)]);
+    this.endPad = new TextRenderable(this.renderer, { content: "", height: 0, flexShrink: 0 });
+    this.pageViews = [...this.gaps.flatMap((gap, index) => [gap, ...this.blockViews.slice(index, index + 1)]), this.endPad];
     for (const view of this.pageViews) this.scroll.add(view);
     this.renderMarks();
+    this.section = undefined;
+    this.conflictAt = undefined;
+    if (this.mindMap) this.highlightMapLine();
   }
 
   private renderMarks(): void {
@@ -279,7 +444,10 @@ export class Viewer {
     });
     this.gaps.forEach((gap, index) => {
       const removed = marks?.removed.has(index) ?? false;
-      gap.height = removed || (index > 0 && index < last) ? 1 : 0;
+      const before = this.document.blocks[index - 1];
+      const after = this.document.blocks[index];
+      const sameList = before?.kind === "markdown" && after?.kind === "markdown" && before.list !== undefined && before.list === after.list;
+      gap.height = removed || (index > 0 && index < last && !sameList) ? 1 : 0;
       gap.content = removed ? styled([fg(theme.removed)("──")]) : "";
     });
   }
@@ -332,6 +500,7 @@ export class Viewer {
     const box = new BoxRenderable(this.renderer, { flexDirection: "column", flexGrow: 1, flexShrink: 1 });
     const images = this.options.images();
     if (block.kind === "mermaid") return this.diagramView(box, block.source, page, images);
+    if (block.kind === "conflict") return this.conflictView(block);
     const path = page ? resolveAsset(this.options.root, page, block.target, files) : undefined;
     const caption = block.alt || block.target;
     if (path && images.enabled) {
@@ -340,6 +509,18 @@ export class Viewer {
     }
     const label: Part[] = [fg(theme.muted)("[image] "), caption, ...(path ? [] : [fg(theme.warning)(" (not found)")])];
     box.add(new TextRenderable(this.renderer, { content: styled(label) }));
+    return box;
+  }
+
+  private conflictView(block: Extract<Block, { kind: "conflict" }>): BoxRenderable {
+    const box = new BoxRenderable(this.renderer, { flexDirection: "column", flexGrow: 1, flexShrink: 1, border: true, borderStyle: "rounded", borderColor: theme.warning, title: " merge conflict · 1 yours · 2 theirs · b both ", titleColor: theme.warning });
+    const side = (label: string, text: string, color: string) => {
+      box.add(new TextRenderable(this.renderer, { content: styled([bold(fg(color)(label))]), wrapMode: "none" }));
+      box.add(text.trim() === "" ? new TextRenderable(this.renderer, { content: "(nothing)", fg: theme.muted }) : new MarkdownRenderable(this.renderer, { content: text, syntaxStyle: this.style, flexShrink: 1 }));
+    };
+    side(`yours · ${block.oursLabel || "HEAD"}`, block.ours, theme.accent);
+    box.add(new TextRenderable(this.renderer, { content: "", height: 1 }));
+    side(`theirs · ${block.theirsLabel || "incoming"}`, block.theirs, theme.follow);
     return box;
   }
 
@@ -392,7 +573,8 @@ export class Viewer {
 
   private async onFrame(): Promise<void> {
     if (this.pendingScroll) {
-      const target = "top" in this.pendingScroll ? this.pendingScroll.top : this.lineTop(this.pendingScroll.line);
+      const pending = this.pendingScroll;
+      const target = "top" in pending ? pending.top : "line" in pending ? this.lineTop(pending.line) : this.centreTop(pending.centre);
       this.scroll.scrollTo(target);
       this.settleFrames--;
       if (this.settleFrames <= 0) this.pendingScroll = undefined;
@@ -403,6 +585,7 @@ export class Viewer {
       this.renderer.requestRender();
     }
     this.settleHints();
+    if (this.mindMapView.step()) this.renderer.requestRender();
     if (this.message && Date.now() > this.message.until) {
       this.message = undefined;
       this.renderStatus();
@@ -456,14 +639,45 @@ export class Viewer {
       this.renderer.requestRender();
       return;
     }
+    if (this.mindMap) {
+      if (key.name === "tab") this.focusMap(!this.mapFocused);
+      else if (this.mapFocused || key.name === "escape" || key.name === "a" || key.name === "q" || (key.ctrl && key.name === "c")) this.mindMapKey(key);
+      else this.scrollKey(key);
+      this.renderStatus();
+      this.renderer.requestRender();
+      return;
+    }
+    if (key.name === "q" || (key.ctrl && key.name === "c")) this.close();
+    else if (this.scrollKey(key)) return this.renderer.requestRender();
+    else if (key.name === "h" && key.shift) this.travel(() => this.history.back());
+    else if (key.name === "l" && key.shift) this.travel(() => this.history.forward());
+    else if (key.name === "f") this.openPicker("Links", this.linkItems());
+    else if (key.name === "p" && key.shift) void this.sync();
+    else if (key.name === "x" && key.shift) void this.abortMerge();
+    else if (key.name === "n") this.nextConflict(key.shift ? -1 : 1);
+    else if (key.name === "1" && this.conflicts().length > 0) this.settleConflict("ours");
+    else if (key.name === "2" && this.conflicts().length > 0) this.settleConflict("theirs");
+    else if (key.name === "b" && this.conflicts().length > 0) this.settleConflict("both");
+    else if (key.name === "p") this.openPicker("Pages", this.pageItems());
+    else if (key.name === "o") this.openPicker("Outline", this.outlineItems());
+    else if (key.name === "t") this.openPicker("Tags", this.tagItems());
+    else if (key.name === "i") this.navigate(existsSync(join(this.options.root, indexPage)) ? indexPage : undefined);
+    else if (key.name === "a") this.openMindMap();
+    else if (key.name === "w") this.toggleFollow();
+    else if (key.name === "e") void this.edit();
+    else if (key.name === "r") this.reload();
+    else return;
+    this.renderer.requestRender();
+  };
+
+  private scrollKey(key: KeyEvent): boolean {
     const half = Math.max(Math.floor(this.scroll.height / 2), 1);
     const scrollBy = (delta: number) => {
       this.scroll.scrollBy(delta);
       this.stopFollowing();
       this.lookedAt();
     };
-    if (key.name === "q" || (key.ctrl && key.name === "c")) this.close();
-    else if (key.name === "j" || key.name === "down") scrollBy(1);
+    if (key.name === "j" || key.name === "down") scrollBy(1);
     else if (key.name === "k" || key.name === "up") scrollBy(-1);
     else if (key.name === "d" || (key.ctrl && key.name === "d")) scrollBy(half);
     else if (key.name === "u" || (key.ctrl && key.name === "u")) scrollBy(-half);
@@ -471,19 +685,128 @@ export class Viewer {
     else if (key.name === "pageup") scrollBy(1 - this.scroll.height);
     else if (key.name === "home" || (key.name === "g" && !key.shift)) scrollBy(-this.scroll.scrollTop);
     else if (key.name === "end" || (key.name === "g" && key.shift)) scrollBy(this.scroll.scrollHeight);
-    else if (key.name === "h" && key.shift) this.travel(() => this.history.back());
-    else if (key.name === "l" && key.shift) this.travel(() => this.history.forward());
-    else if (key.name === "f") this.openPicker("Links", this.linkItems());
-    else if (key.name === "p") this.openPicker("Pages", this.pageItems());
-    else if (key.name === "o") this.openPicker("Outline", this.outlineItems());
-    else if (key.name === "t") this.openPicker("Tags", this.tagItems());
-    else if (key.name === "i") this.navigate(existsSync(join(this.options.root, indexPage)) ? indexPage : undefined);
-    else if (key.name === "w") this.toggleFollow();
-    else if (key.name === "e") void this.edit();
-    else if (key.name === "r") this.reload();
-    else return;
-    this.renderer.requestRender();
-  };
+    else return false;
+    return true;
+  }
+
+  private openMindMap(): void {
+    this.stopFollowing();
+    this.mapReturn = { page: this.page, top: this.scroll.scrollTop };
+    this.centreMindMap();
+  }
+
+  private centreMindMap(): void {
+    const page = this.page;
+    const line = this.topLine();
+    const files = this.lazyFiles();
+    const pages = listPages(this.options.root).map((info) => ({ page: info.path, document: parseDocument(this.sourceOf(info.path) ?? ""), tags: this.tagsOf(info.path) }));
+    const tree = buildNotebookTree(pages, (from, target) => resolveTarget(this.options.root, from, target, files), indexPage);
+    this.mindMap = new NotebookMapState(tree);
+    this.mindMap.viewRows = this.mindMapView.rows();
+    this.mapFocused = true;
+    this.mindMapView.focus(true);
+    this.mindMap.selectPage(page, line);
+    this.mindMapView.render(this.mindMap);
+    this.highlightMapLine();
+    this.renderStatus();
+  }
+
+  private closeMindMap(): void {
+    this.mindMap = undefined;
+    this.mapReturn = undefined;
+    this.mindMapView.render(undefined);
+    this.showSection(undefined);
+    this.renderStatus();
+  }
+
+  private mindMapKey(key: KeyEvent): void {
+    const outcome = notebookMapKey(this.mindMap!, key);
+    if (outcome === "move") {
+      this.mindMapView.render(this.mindMap);
+      this.followMap();
+      this.renderStatus();
+    } else if (outcome === "land") {
+      this.land();
+    } else if (outcome === "exit") {
+      const back = this.mapReturn;
+      this.closeMindMap();
+      if (!back) return;
+      if (back.page !== this.page) back.page === undefined ? this.renderOverview() : this.load(back.page);
+      this.scrollTo({ top: back.top });
+    }
+  }
+
+  private land(): void {
+    const back = this.mapReturn;
+    const current = this.history.current;
+    if (back && current && this.page && this.page !== back.page) {
+      current.scroll = back.top;
+      this.history.visit(this.page);
+    }
+    this.closeMindMap();
+  }
+
+  private followMap(): void {
+    const where = this.mindMap?.choice.node.where;
+    if (!where) {
+      this.showSection(undefined);
+      return;
+    }
+    if (where.page !== this.page) this.load(where.page);
+    const section = this.showSection(where);
+    this.scrollTo(section ? { centre: section } : { line: this.whereLine(where) ?? 0 });
+  }
+
+  private highlightMapLine(): void {
+    const where = this.mindMap?.choice.node.where;
+    this.showSection(where && where.page === this.page ? where : undefined);
+  }
+
+  private whereLine(where: Where): number | undefined {
+    if (where.line !== undefined || where.anchor === undefined) return where.line;
+    const key = headingKey(where.anchor);
+    return this.document.headings.find((heading) => headingKey(heading.text) === key)?.line;
+  }
+
+  private sectionAt(where: Where): Section | undefined {
+    const line = this.whereLine(where);
+    if (line === undefined) return undefined;
+    const blocks = this.document.blocks;
+    const heading = this.document.headings.find((candidate) => candidate.line === line);
+    if (!heading) {
+      if (line === 0) return undefined;
+      const at = blockAtLine(blocks, line);
+      return { first: at, last: at };
+    }
+    if (heading.level === 1) return undefined;
+    const end = this.document.headings.find((candidate) => candidate.line > line && candidate.level <= heading.level)?.line ?? Infinity;
+    const inside = blocks.flatMap((block, index) => (block.startLine >= line && block.startLine < end ? [index] : []));
+    return inside.length > 0 ? { first: inside[0]!, last: inside.at(-1)! } : undefined;
+  }
+
+  private showSection(where: Where | undefined): Section | undefined {
+    const section = where ? this.sectionAt(where) : undefined;
+    this.section = section;
+    this.blockViews.forEach((view, index) => {
+      const inside = section !== undefined && index >= section.first && index <= section.last;
+      view.backgroundColor = inside ? theme.surface : "transparent";
+      view.opacity = section && !inside ? dimmedOpacity : 1;
+    });
+    this.gaps.forEach((gap, index) => {
+      const inside = section !== undefined && index > section.first && index <= section.last;
+      gap.bg = inside ? theme.surface : "transparent";
+      if (gap.content.chunks.every((chunk) => chunk.text.trim() === "")) gap.content = inside ? " ".repeat(this.blockViews[0]?.width ?? this.renderer.width) : "";
+    });
+    if (this.endPad) this.endPad.height = this.mindMap ? this.scroll.height : 0;
+    return section;
+  }
+
+  private centreTop(section: Section): number {
+    const top = this.blockTop(section.first);
+    const bottom = this.blockTop(section.last) + (this.blockViews[section.last]?.height ?? 0);
+    const room = this.scroll.height - (bottom - top);
+    return room <= 0 ? top : Math.max(top - Math.floor(room / 2), 0);
+  }
 
   private navigate(page: string | undefined, anchor?: string): void {
     this.stopFollowing();
@@ -590,13 +913,17 @@ export class Viewer {
     const after = this.remember(page);
     if (before !== undefined && after !== undefined) this.markChanges(page, before, after, false);
     this.reload();
+    this.applyDeferred();
+    this.renderer.requestRender();
+  }
+
+  private applyDeferred(): void {
     const deferred = [...this.deferred];
     this.deferred.clear();
     for (const path of deferred) this.fileChanged(path);
     const show = this.pendingShow;
     this.pendingShow = undefined;
     if (show) this.show(show.target, show.notebook);
-    this.renderer.requestRender();
   }
 
   askForContext(request: ContextRequest): void {
@@ -609,6 +936,8 @@ export class Viewer {
       this.stopCommenting();
       this.renderer.requestRender();
     });
+    this.refocusMap = this.mindMap !== undefined && this.mapFocused;
+    if (this.mindMap) this.focusMap(false);
     this.startCommenting();
     request.picking("Pick a block in quoll · Esc cancels");
     this.renderer.requestRender();
@@ -672,7 +1001,15 @@ export class Viewer {
 
   private stopCommenting(): void {
     this.commenting = undefined;
+    if (this.refocusMap && this.mindMap) this.focusMap(true);
+    this.refocusMap = false;
     this.renderHints();
+    if (this.mindMap) this.highlightMapLine();
+  }
+
+  private focusMap(map: boolean): void {
+    this.mapFocused = map;
+    this.mindMapView.focus(map);
   }
 
   private renderHints(): void {
@@ -724,14 +1061,29 @@ export class Viewer {
     const page = this.page ?? "notebook";
     const tags = this.page ? this.tagsOf(this.page).map((tag) => ` #${tag}`).join("") : "";
     const follow = this.following ? fg(theme.follow)(" ◉ following") : fg(theme.muted)(" ○ not following");
-    const help = this.commenting ? "attach: a letter, or j/k and Enter · click · Esc cancel" : "f links · p pages · t tags · o outline · e edit · H/L back/fwd · w follow · q quit";
-    const right = this.message ? fg(theme.warning)(this.message.text) : fg(this.commenting ? theme.selected : theme.muted)(help);
-    this.status.content = styled([bold(fg(theme.accent)(` ${page}`)), fg(theme.muted)(tags), follow, "   ", right]);
+    const door = this.mindMap?.door;
+    const help = this.commenting ? "attach: a letter, or j/k and Enter · click · Esc cancel" : this.mindMap?.filter !== undefined ? "type to filter · ↑↓ pick · Enter go · Esc cancel" : this.mindMap && !this.mapFocused ? "page: scroll · Tab atlas · a land · Esc exit" : door ? `Enter ⤳ ${door.to} · ⌫ back · Tab page · v view` : this.mindMap ? "hjkl move · ⌫ back · Tab page · v view · a land · Esc exit" : "f links · p pages · t tags · o outline · a atlas · e edit · H/L back/fwd · w follow · q quit";
+    const right = this.message ? fg(theme.warning)(this.message.text) : fg(this.commenting || this.mindMap ? theme.selected : theme.muted)(help);
+    const git = this.gitStatus;
+    const ahead = git?.merging
+      ? fg(theme.warning)(` ⚠ merging · ${count(git.conflicts.length, "conflicted page")}${git.elsewhere.length > 0 ? ` · ${git.elsewhere.length} elsewhere` : ""} · P finish · X abort`)
+      : git && (git.ahead > 0 || git.behind > 0)
+        ? fg(theme.changed)(` ${git.ahead > 0 ? `↑${git.ahead}` : ""}${git.behind > 0 ? `${git.ahead > 0 ? " " : ""}↓${git.behind}` : ""} P sync`)
+        : "";
+    this.status.content = styled([bold(fg(theme.accent)(` ${page}`)), fg(theme.muted)(tags), ahead, follow, "   ", right]);
   }
 }
 
 function deleteCommand(id: number): string {
   return `\x1b_Ga=d,d=I,i=${id},q=2\x1b\\`;
+}
+
+function commits(total: number): string {
+  return count(total, "commit");
+}
+
+function count(total: number, noun: string): string {
+  return total === 1 ? `1 ${noun}` : `${total} ${noun}s`;
 }
 
 function ago(modified: number): string {

@@ -14,7 +14,7 @@ export function commentContext(target: CommentTarget): Comment {
   const last = block.endLine + 1;
   const lines = first === last ? `line ${first}` : `lines ${first}–${last}`;
   const path = headingPath(target.headings, block.startLine);
-  const kind = block.kind === "image" ? `, image ${target.asset ?? block.target}` : block.kind === "mermaid" ? ", a mermaid diagram" : "";
+  const kind = block.kind === "image" ? `, image ${target.asset ?? block.target}` : block.kind === "mermaid" ? ", a mermaid diagram" : block.kind === "conflict" ? ", a merge conflict" : "";
   const where = path ? ` under "${path}"` : "";
   const quoted = quote(target.source.split("\n").slice(block.startLine, block.endLine + 1));
   const text = `Comment on ${page}, ${lines}${where}${kind}:\nFile: ${file}\n${quoted}\n`;
@@ -40,6 +40,7 @@ function quote(lines: string[]): string {
 function describe(block: Block): string {
   if (block.kind === "image") return `image ${basename(block.target)}`;
   if (block.kind === "mermaid") return "diagram";
+  if (block.kind === "conflict") return "merge conflict";
   const first = block.text.split("\n").find((line) => line.trim() !== "") ?? "";
   const fenceMatch = /^\s*(?:`{3,}|~{3,})\s*([\w+-]*)/.exec(first);
   if (fenceMatch) return fenceMatch[1] ? `${fenceMatch[1]} code` : "code";
