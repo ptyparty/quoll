@@ -8,7 +8,7 @@ import hero_sandbox as hs
 ROOT = '/tmp/demo-notes'
 SESSION = 'hero'
 COLS, ROWS = 170, 48
-ALT_O = '\x1bo'
+ALT_O, ALT_SHIFT_C = '\x1bo', '\x1bC'
 
 PROMPT = (
     "Plan retries with backoff for the webhooks we send to partners. "
@@ -57,7 +57,7 @@ def quoll_pane(text):
 
 
 def table_hint(text):
-    found = re.search(r'│ ([a-z]) ┌', quoll_pane(text))
+    found = re.search(r'([a-z]) +╭', quoll_pane(text))
     return found.group(1) if found else None
 
 
@@ -68,11 +68,11 @@ def tour(cast):
     cast.hold(0.6)
     cast.press('\r', gap=1.0)
     cast.lapse_until(lambda t: '🚀 done' not in t, budget=20)
-    if not cast.lapse_until(lambda t: '🚀 done' in t and '┌' in quoll_pane(t), budget=400):
+    if not cast.lapse_until(lambda t: '🚀 done' in t and '╭' in quoll_pane(t), budget=400):
         return False
     cast.hold(3)
     cast.press(ALT_O, gap=1.0)
-    cast.keys('c', per_key=1.5)
+    cast.press(ALT_SHIFT_C, gap=1.5)
     hint = table_hint(cast.text())
     if hint is None:
         return False
