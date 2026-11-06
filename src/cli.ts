@@ -7,6 +7,7 @@ import { listenForContext } from "./context.ts";
 import { hasTag } from "./document.ts";
 import { guideCommand } from "./guide.ts";
 import { askRootWithKomux } from "./komux-ask.ts";
+import { komuxZoom } from "./komux-control.ts";
 import { findNotebook, type Focus, isFile, notebookPath, openNotebook, pageFromPath, pagesByTag } from "./notebook.ts";
 import { terminalImageOutput } from "./render/image.ts";
 import { findChrome, MermaidRenderer, mermaidCacheDir } from "./render/mermaid.ts";
@@ -262,6 +263,7 @@ async function view(renderer: CliRenderer, root: string, follow: boolean): Promi
     git: notebookGit(root),
     mermaid: new MermaidRenderer(mermaidCacheDir(), findChrome()),
     clipboard: systemClipboard(),
+    zoomPane: komuxZoom(),
     images: () => terminalImageOutput(renderer.capabilities?.kitty_graphics ?? false),
     edit: async (file, line) => {
       await renderer.suspend();
@@ -288,6 +290,7 @@ async function view(renderer: CliRenderer, root: string, follow: boolean): Promi
   try {
     viewer.start();
     await viewer.run();
+    await Promise.race([viewer.settled(), Bun.sleep(1500)]);
   } finally {
     for (const signal of signals) process.off(signal, onSignal);
     stopWatching();

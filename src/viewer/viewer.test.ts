@@ -86,6 +86,61 @@ describe("viewer", () => {
     expect(frame).toContain("Parse error on line 1");
   });
 
+  test("z zooms the image on screen, asks komux to zoom the pane, and gives the zoom back on Esc", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n![mockup](mockup.png)");
+    writeFileSync(join(root, "mockup.png"), tinyPng(400, 200));
+    const written: string[] = [];
+    const zooms: boolean[] = [];
+    const { setup } = await open(false, {
+      images: () => ({ enabled: true, write: (commands) => written.push(...commands) }),
+      zoomPane: async (zoomed) => {
+        zooms.push(zoomed);
+        return false;
+      },
+    });
+    written.length = 0;
+    setup.mockInput.pressKey("z");
+    let frame = await settle(setup);
+    expect(frame).toContain("ZOOM");
+    expect(frame).toContain("mockup.png · fit");
+    expect(written.filter((command) => command.includes("a=t,"))).toHaveLength(1);
+    expect(written.filter((command) => command.includes("a=p,"))).toHaveLength(1);
+    setup.mockInput.pressKey("+");
+    frame = await settle(setup);
+    expect(frame).toContain("mockup.png · 1.5×");
+    expect(written.filter((command) => command.includes("a=t,"))).toHaveLength(1);
+    expect(written.filter((command) => command.includes("a=p,"))).toHaveLength(2);
+    setup.mockInput.pressEscape();
+    frame = await settle(setup);
+    expect(frame).not.toContain("ZOOM");
+    expect(zooms).toEqual([true, false]);
+    expect(written.at(-1)).toContain("a=d,d=I");
+  });
+
+  test("the wheel zooms and dragging pans the zoomed image", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\n![mockup](mockup.png)");
+    writeFileSync(join(root, "mockup.png"), tinyPng(800, 400));
+    const { setup } = await open(false, { images: () => ({ enabled: true, write: () => {} }) });
+    setup.mockInput.pressKey("z");
+    await settle(setup);
+    await setup.mockMouse.scroll(40, 8, "up");
+    await setup.mockMouse.scroll(40, 8, "up");
+    let frame = await settle(setup);
+    expect(frame).toContain("mockup.png · 2×");
+    const before = frame;
+    await setup.mockMouse.drag(40, 8, 20, 4);
+    frame = await settle(setup);
+    expect(frame).toContain("mockup.png · 2×");
+    expect(frame).not.toEqual(before);
+  });
+
+  test("z says so when there's no image on screen", async () => {
+    writeFileSync(join(root, "index.md"), "# Index\n\nJust words.");
+    const { setup } = await open(false, { images: () => ({ enabled: true, write: () => {} }) });
+    setup.mockInput.pressKey("z");
+    expect(await settle(setup)).toContain("No image on screen to zoom");
+  });
+
   test("shows mermaid source when the terminal can't show images", async () => {
     writeFileSync(join(root, "index.md"), "# Index\n\n```mermaid\nflowchart LR\n  A --> B\n```");
     const mermaid = new MermaidRenderer(join(root, ".cache"), "/usr/bin/chrome", async () => {

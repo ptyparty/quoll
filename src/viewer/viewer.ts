@@ -2,7 +2,7 @@ import { BorderChars, BoxRenderable, CodeRenderable, MarkdownRenderable, MouseBu
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { blockAtLine, diffBlocks, firstChangedLine, frontmatterTags, hasTag, headingKey, parseDocument, resolveConflict, type Block, type Document, type Resolution } from "../document.ts";
-import { imageIdColor, placeholderLines, type ImageOutput } from "../render/image.ts";
+import { defaultCellSize, imageIdColor, newImageId, placeCommand, placeholderLines, readImage, uploadCommands, zoomedBox, type CellSize, type ImageBox, type ImageOutput, type LoadedImage } from "../render/image.ts";
 import { markdownNode, markdownStyle, sendImage, tableOptions } from "../render/markdown.ts";
 import type { MermaidRenderer } from "../render/mermaid.ts";
 import { fitHints, hintParts, partsWidth, pill, styled, type Hint, type Part } from "../render/styled.ts";
@@ -12,6 +12,7 @@ import { isCopyableImage, type Clip, type CopyToClipboard } from "../clipboard.t
 import { commentContext } from "../comment.ts";
 import type { ContextRequest } from "../context.ts";
 import type { GitStatus, NotebookGit } from "../git.ts";
+import type { ZoomOwnPane } from "../komux-control.ts";
 import type { Reply } from "../socket.ts";
 import { History } from "./history.ts";
 import { PickerState, PickerView, pickerBindings, pickerKey, type PickerItem, type PickerOutcome } from "./picker.ts";
@@ -29,6 +30,7 @@ export type ViewerOptions = {
   mermaid?: MermaidRenderer;
   git?: NotebookGit;
   clipboard?: CopyToClipboard;
+  zoomPane?: ZoomOwnPane;
 };
 
 type Picker = { state: PickerState<() => void> };
@@ -41,11 +43,14 @@ type Section = { first: number; last: number };
 type ScrollTarget = { line: number } | { top: number } | { centre: Section };
 type BlockFrame = { frame: BoxRenderable; gutter: TextRenderable };
 type PageMarks = { changed: Set<number>; removed: Set<number> };
-type BlockPick = { verb: string; mode: string; choose: (index: number) => void; selected: number; hints: Map<string, number>; top: number | undefined; settleFrames: number };
+type BlockPick = { verb: string; mode: string; choose: (index: number) => void; selected: number; hints: Map<string, number>; top: number | undefined; settleFrames: number; only: ((index: number) => boolean) | undefined };
 type Upload = { key: string; id: number; cols: number; rows: number };
+type Zoom = { path: string; image: LoadedImage; id: number; box: ImageBox | undefined; level: number; top: number; left: number; view: TextRenderable; paneZoomed: Promise<boolean | undefined> | undefined; drag: { x: number; y: number; top: number; left: number } | undefined };
+type ViewPoint = { row: number; col: number };
 
 const imageMargin = { cols: 4, rows: 4 };
 const imageFile = /\.(png|jpe?g|gif|webp)$/i;
+const zoomLevels = [1, 1.5, 2, 3, 4];
 const followContext = 2;
 const hintLetters = "asdfghlzxcvbnmertyuiopw";
 const barChars = { ...BorderChars.single, vertical: "▎" };
@@ -56,6 +61,7 @@ const gitPollMs = 30_000;
 const gitSettleMs = 2_000;
 
 export class Viewer {
+  private readonly frame: BoxRenderable;
   private readonly scroll: ScrollBoxRenderable;
   private readonly status: TextRenderable;
   private readonly pickerView: PickerView;
@@ -79,6 +85,8 @@ export class Viewer {
   private gaps: TextRenderable[] = [];
   private gutters: TextRenderable[] = [];
   private blockPick: BlockPick | undefined;
+  private zoom: Zoom | undefined;
+  private paneZooms: Promise<unknown> = Promise.resolve();
   private asking: ContextRequest | undefined;
   private picker: Picker | undefined;
   private mindMap: NotebookMapState | undefined;
@@ -119,6 +127,7 @@ export class Viewer {
     this.markingStyle = markdownStyle(renderer, true);
     this.renderNode = markdownNode(renderer);
     const frame = new BoxRenderable(renderer, { flexDirection: "column", width: "100%", height: "100%", backgroundColor: theme.background });
+    this.frame = frame;
     this.scroll = new ScrollBoxRenderable(renderer, {
       flexGrow: 1,
       paddingRight: 1,
@@ -320,6 +329,7 @@ export class Viewer {
       return;
     }
     if (!path.endsWith(".md")) {
+      if (this.zoom && join(this.options.root, path) === this.zoom.path) this.refreshZoomImage();
       if (imageFile.test(path) && this.document.blocks.some((block) => block.kind === "image")) this.reload();
       return;
     }
@@ -348,6 +358,7 @@ export class Viewer {
   }
 
   close(): void {
+    this.closeZoom();
     clearInterval(this.gitTimer);
     clearTimeout(this.gitSoon);
     this.renderer.keyInput.off("keypress", this.onKey);
@@ -387,6 +398,7 @@ export class Viewer {
   }
 
   private visit(page: string | undefined, anchor?: string): boolean {
+    this.closeZoom();
     this.saveScroll();
     if (page === undefined) {
       this.renderOverview();
@@ -674,6 +686,7 @@ export class Viewer {
     if (this.editing) return [];
     const picker = this.picker;
     if (picker) return pickerBindings.map((binding) => ({ ...binding, run: binding.run && (() => this.pickerDone(binding.run!(picker.state))) }));
+    if (this.zoom) return this.zoomBindings();
     if (this.blockPick) return this.blockPickBindings();
     if (this.helpView.open) return this.helpBindings();
     if (this.menu) return this.menuBindings(this.menu);
@@ -725,6 +738,7 @@ export class Viewer {
       { group: "Search", label: "clear the search", on: ["escape"], when: searching, run: () => this.clearSearch() },
       { group: "Page", label: "edit", on: ["e"], menu: "e", run: () => void this.edit() },
       { group: "Page", label: "copy a block or image", on: ["y"], menu: "y", when: () => this.options.clipboard !== undefined, run: () => this.startCopying() },
+      { group: "Page", label: "zoom an image", on: ["z"], menu: "z", when: () => this.options.images().enabled, run: () => this.startZoom() },
       { group: "Page", label: "reload", on: ["r"], menu: "r", run: () => this.reload() },
       { group: "Page", label: this.following ? "stop following edits" : "follow edits", on: ["w"], menu: "w", run: () => this.toggleFollow() },
       ...this.scrollBindings(),
@@ -784,6 +798,20 @@ export class Viewer {
       { group, label: "previous block", on: ["k", "up"], run: () => this.selectBlock(Math.max(pick.selected - 1, 0)) },
       { group, label: `${pick.verb} the selected block`, on: ["return"], run: () => pick.choose(pick.selected) },
       { group, label: "cancel", on: ["escape", "q", "^c"], run: () => this.cancelBlockPick() },
+    ];
+  }
+
+  private zoomBindings(): Binding<() => void>[] {
+    const group = "Zoom";
+    return [
+      { group, label: "zoom in", on: ["+", "="], run: () => this.zoomBy(1) },
+      { group, label: "zoom out", on: ["-"], run: () => this.zoomBy(-1) },
+      { group, label: "fit", on: ["0"], run: () => this.zoomBy(-zoomLevels.length) },
+      { group, label: "pan left", on: ["h", "left"], run: () => this.pan(0, -1) },
+      { group, label: "pan down", on: ["j", "down"], run: () => this.pan(1, 0) },
+      { group, label: "pan up", on: ["k", "up"], run: () => this.pan(-1, 0) },
+      { group, label: "pan right", on: ["l", "right"], run: () => this.pan(0, 1) },
+      { group, label: "close", on: ["escape", "q", "z", "^c"], run: () => this.closeZoom() },
     ];
   }
 
@@ -1265,11 +1293,171 @@ export class Viewer {
     this.renderer.requestRender();
   }
 
-  private startBlockPick(verb: string, mode: string, choose: (index: number) => void): void {
+  private startZoom(): void {
+    const page = this.page;
+    if (!page) return this.flash("No page open to zoom into");
+    const zoomable = (index: number) => this.zoomAsset(page, this.document.blocks[index]!) !== undefined;
+    const shown = this.visibleBlocks().filter(zoomable);
+    if (shown.length === 0) return this.flash("No image on screen to zoom");
+    if (shown.length === 1) return this.zoomBlock(shown[0]!);
+    this.startBlockPick("zoom", "ZOOM", (index) => this.zoomBlock(index), zoomable);
+  }
+
+  private zoomAsset(page: string, block: Block): string | undefined {
+    if (block.kind === "mermaid") {
+      const diagram = this.options.mermaid?.diagram(block.source, () => {});
+      return diagram && "png" in diagram ? diagram.png : undefined;
+    }
+    const file = this.blockAsset(page, block);
+    return file && imageFile.test(file) ? file : undefined;
+  }
+
+  private zoomBlock(index: number): void {
+    this.stopBlockPick();
+    const page = this.page;
+    const block = this.document.blocks[index];
+    const path = page && block ? this.zoomAsset(page, block) : undefined;
+    if (!path) return this.flash("That block isn't an image");
+    let image: LoadedImage;
+    try {
+      image = readImage(path);
+    } catch (error) {
+      return this.flash(`Could not zoom: ${(error as Error).message}`);
+    }
+    this.stopFollowing();
+    const view = new TextRenderable(this.renderer, {
+      flexGrow: 1,
+      wrapMode: "none",
+      onMouseDown: (event) => this.startDrag(event.x, event.y),
+      onMouseDrag: (event) => this.drag(event.x, event.y),
+      onMouseUp: () => this.endDrag(),
+      onMouseDragEnd: () => this.endDrag(),
+      onMouseScroll: (event) => this.wheelZoom(event.scroll?.direction, { row: event.y - view.y, col: event.x - view.x }),
+    });
+    this.scroll.visible = false;
+    this.frame.insertBefore(view, this.status);
+    const id = newImageId();
+    this.options.images().write(uploadCommands(id, image));
+    const paneZoomed = this.options.zoomPane ? this.queuePaneZoom(() => this.options.zoomPane!(true)) : undefined;
+    this.zoom = { path, image, id, box: undefined, level: 0, top: 0, left: 0, view, paneZoomed, drag: undefined };
+    this.renderZoom();
+  }
+
+  private queuePaneZoom<T>(request: () => Promise<T>): Promise<T> {
+    const next = this.paneZooms.then(request);
+    this.paneZooms = next.catch(() => undefined);
+    return next;
+  }
+
+  private refreshZoomImage(): void {
+    const zoom = this.zoom!;
+    try {
+      zoom.image = readImage(zoom.path);
+    } catch {
+      return;
+    }
+    const images = this.options.images();
+    images.write([deleteCommand(zoom.id)]);
+    zoom.id = newImageId();
+    images.write(uploadCommands(zoom.id, zoom.image));
+    zoom.box = undefined;
+    this.renderZoom();
+  }
+
+  private zoomView(): ImageBox {
+    return { cols: Math.max(this.renderer.width - 1, 1), rows: Math.max(this.renderer.height - 1, 1) };
+  }
+
+  private renderZoom(anchor?: ViewPoint): void {
+    const zoom = this.zoom;
+    if (!zoom) return;
+    const view = this.zoomView();
+    const box = zoomedBox(zoom.image.info.width, zoom.image.info.height, view, zoomLevels[zoom.level]!, this.cellSize());
+    const old = zoom.box;
+    if (old?.cols !== box.cols || old.rows !== box.rows) {
+      const at = anchor ?? { row: view.rows / 2, col: view.cols / 2 };
+      const offset = (size: number, inView: number) => Math.max(Math.floor((inView - size) / 2), 0);
+      const share = old ? { row: (zoom.top + at.row - offset(old.rows, view.rows)) / old.rows, col: (zoom.left + at.col - offset(old.cols, view.cols)) / old.cols } : { row: 0.5, col: 0.5 };
+      this.options.images().write([placeCommand(zoom.id, box)]);
+      zoom.box = box;
+      zoom.top = Math.round(share.row * box.rows - at.row);
+      zoom.left = Math.round(share.col * box.cols - at.col);
+    }
+    zoom.top = Math.min(Math.max(zoom.top, 0), Math.max(box.rows - view.rows, 0));
+    zoom.left = Math.min(Math.max(zoom.left, 0), Math.max(box.cols - view.cols, 0));
+    const above = Array<string>(Math.max(Math.floor((view.rows - box.rows) / 2), 0)).fill("");
+    const indent = " ".repeat(Math.max(Math.floor((view.cols - box.cols) / 2), 0));
+    const lines = placeholderLines(box, { top: zoom.top, left: zoom.left, rows: view.rows, cols: view.cols });
+    zoom.view.content = [...above, ...lines.map((line) => indent + line)].join("\n");
+    zoom.view.fg = imageIdColor(zoom.id);
+    this.renderStatus();
+    this.renderer.requestRender();
+  }
+
+  private cellSize(): CellSize {
+    const resolution = this.renderer.resolution;
+    if (!resolution || resolution.width <= 0 || resolution.height <= 0) return defaultCellSize;
+    return { width: resolution.width / this.renderer.width, height: resolution.height / this.renderer.height };
+  }
+
+  private zoomBy(steps: number, anchor?: ViewPoint): void {
+    const zoom = this.zoom!;
+    zoom.level = Math.min(Math.max(zoom.level + steps, 0), zoomLevels.length - 1);
+    this.renderZoom(anchor);
+  }
+
+  private wheelZoom(direction: string | undefined, at: ViewPoint): void {
+    if (!this.zoom || (direction !== "up" && direction !== "down")) return;
+    this.zoomBy(direction === "up" ? 1 : -1, at);
+  }
+
+  private pan(rows: number, cols: number): void {
+    const zoom = this.zoom!;
+    zoom.top += rows * Math.max(Math.round(this.renderer.height / 4), 1);
+    zoom.left += cols * Math.max(Math.round(this.renderer.width / 4), 1);
+    this.renderZoom();
+  }
+
+  private startDrag(x: number, y: number): void {
+    const zoom = this.zoom;
+    if (zoom) zoom.drag = { x, y, top: zoom.top, left: zoom.left };
+  }
+
+  private drag(x: number, y: number): void {
+    const zoom = this.zoom;
+    if (!zoom?.drag) return;
+    zoom.top = zoom.drag.top - (y - zoom.drag.y);
+    zoom.left = zoom.drag.left - (x - zoom.drag.x);
+    this.renderZoom();
+  }
+
+  private endDrag(): void {
+    if (this.zoom) this.zoom.drag = undefined;
+  }
+
+  private closeZoom(): void {
+    const zoom = this.zoom;
+    if (!zoom) return;
+    this.zoom = undefined;
+    this.options.images().write([deleteCommand(zoom.id)]);
+    this.frame.remove(zoom.view);
+    zoom.view.destroy();
+    this.scroll.visible = true;
+    const paneZoomed = zoom.paneZoomed;
+    if (paneZoomed) void this.queuePaneZoom(async () => ((await paneZoomed) === false ? this.options.zoomPane!(false) : undefined));
+    this.renderStatus();
+    this.renderer.requestRender();
+  }
+
+  async settled(): Promise<void> {
+    await this.paneZooms;
+  }
+
+  private startBlockPick(verb: string, mode: string, choose: (index: number) => void, only?: (index: number) => boolean): void {
     this.closeMenu();
     this.helpView.render("", undefined);
     this.stopFollowing();
-    this.blockPick = { verb, mode, choose, selected: this.visibleBlocks()[0] ?? 0, hints: new Map(), top: undefined, settleFrames: 3 };
+    this.blockPick = { verb, mode, choose, selected: this.pickable(only)[0] ?? 0, hints: new Map(), top: undefined, settleFrames: 3, only };
     this.renderHints();
   }
 
@@ -1288,7 +1476,7 @@ export class Viewer {
 
   private assignHints(): void {
     const pick = this.blockPick!;
-    const visible = this.visibleBlocks();
+    const visible = this.pickable(pick.only);
     if (!visible.includes(pick.selected)) pick.selected = visible[0] ?? Math.max(pick.selected, 0);
     pick.hints = new Map(visible.slice(0, hintLetters.length).map((index, at) => [hintLetters[at]!, index]));
     pick.top = this.scroll.scrollTop;
@@ -1336,6 +1524,11 @@ export class Viewer {
       this.blockViews[index]!.backgroundColor = selected ? theme.surface : "transparent";
     });
     this.renderStatus();
+  }
+
+  private pickable(only: ((index: number) => boolean) | undefined): number[] {
+    const visible = this.visibleBlocks();
+    return only ? visible.filter(only) : visible;
   }
 
   private visibleBlocks(): number[] {
@@ -1401,6 +1594,7 @@ export class Viewer {
   }
 
   private readonly onResize = (): void => {
+    this.renderZoom();
     this.renderStatus();
   };
 
@@ -1414,7 +1608,8 @@ export class Viewer {
         ? fg(theme.quoll)(`  ${git.ahead > 0 ? `↑${git.ahead}` : ""}${git.behind > 0 ? `${git.ahead > 0 ? " " : ""}↓${git.behind}` : ""} P sync`)
         : "";
     const follow = this.following ? [fg(theme.quoll)("  ◉ following edits")] : [];
-    const left: Part[] = [pill(this.mode()), " ", fg(theme.text)(page), fg(theme.muted)(tags), ahead, ...follow, ...this.searchParts()];
+    const zoomed = this.zoom ? [fg(theme.muted)(`  ${basename(this.zoom.path)} · ${this.zoom.level === 0 ? "fit" : `${zoomLevels[this.zoom.level]}×`}`)] : [];
+    const left: Part[] = [pill(this.mode()), " ", fg(theme.text)(page), fg(theme.muted)(tags), ahead, ...follow, ...zoomed, ...this.searchParts()];
     const room = this.renderer.width - partsWidth(left) - 3;
     const right = this.message ? [fg(theme.warning)(this.message.text)] : hintParts(fitHints(this.hints(), room), "  ");
     const gap = Math.max(this.renderer.width - partsWidth(left) - partsWidth(right) - 1, 2);
@@ -1432,6 +1627,7 @@ export class Viewer {
   }
 
   private mode(): string {
+    if (this.zoom) return "ZOOM";
     if (this.blockPick) return this.blockPick.mode;
     if (this.mindMap) return "ATLAS";
     if (this.gitStatus?.merging) return "MERGE";
@@ -1439,6 +1635,13 @@ export class Viewer {
   }
 
   private hints(): Hint[] {
+    if (this.zoom)
+      return [
+        ["+/- wheel", "zoom"],
+        ["hjkl drag", "pan"],
+        ["0", "fit"],
+        ["Esc", "close"],
+      ];
     if (this.search?.typing)
       return [
         ["Enter", "keep"],
