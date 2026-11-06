@@ -35,11 +35,24 @@ export function fitImage(width: number, height: number, maxCols: number, maxRows
   return { cols, rows };
 }
 
-export function placeholderLines(box: ImageBox): string[] {
+export type CellSize = { width: number; height: number };
+export type ImageWindow = { top: number; left: number; rows: number; cols: number };
+
+export const defaultCellSize: CellSize = { width: cellWidthPx, height: cellHeightPx };
+
+export function zoomedBox(width: number, height: number, view: ImageBox, zoom: number, cell: CellSize = defaultCellSize): ImageBox {
+  const limit = placeholderDiacritics.length;
+  const aspect = (height * cell.width) / (width * cell.height);
+  let cols = Math.min(view.cols, view.rows / aspect) * zoom;
+  cols = Math.min(cols, limit, limit / aspect);
+  return { cols: Math.max(1, Math.round(cols)), rows: Math.max(1, Math.round(cols * aspect)) };
+}
+
+export function placeholderLines(box: ImageBox, window: ImageWindow = { top: 0, left: 0, ...box }): string[] {
   const lines: string[] = [];
-  for (let row = 0; row < box.rows; row++) {
+  for (let row = window.top; row < Math.min(window.top + window.rows, box.rows); row++) {
     let line = "";
-    for (let col = 0; col < box.cols; col++) line += placeholder + String.fromCodePoint(placeholderDiacritics[row]!, placeholderDiacritics[col]!);
+    for (let col = window.left; col < Math.min(window.left + window.cols, box.cols); col++) line += placeholder + String.fromCodePoint(placeholderDiacritics[row]!, placeholderDiacritics[col]!);
     lines.push(line);
   }
   return lines;
@@ -49,14 +62,19 @@ export function imageIdColor(id: number): string {
   return `#${id.toString(16).padStart(6, "0")}`;
 }
 
-export function uploadCommands(id: number, image: LoadedImage, box: ImageBox): string[] {
+export function placeCommand(id: number, box: ImageBox): string {
+  return `\x1b_Ga=p,U=1,i=${id},p=1,c=${box.cols},r=${box.rows},q=2\x1b\\`;
+}
+
+export function uploadCommands(id: number, image: LoadedImage, box?: ImageBox): string[] {
   const encoded = image.info.format === "png" ? { keys: "f=100", payload: image.data } : rawRgba(image.data, image.info.width);
   const base64 = Buffer.from(encoded.payload).toString("base64");
   const commands: string[] = [];
   for (let start = 0; start < base64.length || start === 0; start += chunkSize) {
     const chunk = base64.slice(start, start + chunkSize);
     const more = start + chunkSize < base64.length ? 1 : 0;
-    const keys = start === 0 ? `a=T,U=1,i=${id},c=${box.cols},r=${box.rows},${encoded.keys},q=2,m=${more}` : `q=2,m=${more}`;
+    const action = box ? `a=T,U=1,i=${id},c=${box.cols},r=${box.rows}` : `a=t,i=${id}`;
+    const keys = start === 0 ? `${action},${encoded.keys},q=2,m=${more}` : `q=2,m=${more}`;
     commands.push(`\x1b_G${keys};${chunk}\x1b\\`);
   }
   return commands;
