@@ -36,13 +36,16 @@ describe("RootChoices", () => {
     expect(choices.chosen(dir, roots)).toBeUndefined();
   });
 
-  test("a directory uses the pick made for its nearest picked parent", () => {
+  test("a pick holds only for its own directory, but suggests itself for the directories under it", () => {
     const roots = [join(dir, "logs/a"), join(dir, "logs/b")];
     const choices = new RootChoices(join(dir, "roots.json"));
     choices.choose(dir, roots[0]!);
     choices.choose(join(dir, "work"), roots[1]!);
-    expect(choices.chosen(join(dir, "work", "repo", "src"), roots)).toBe(roots[1]);
-    expect(choices.chosen(join(dir, "logs"), roots)).toBe(roots[0]);
+    expect(choices.chosen(join(dir, "work", "repo", "src"), roots)).toBeUndefined();
+    expect(choices.chosen(join(dir, "logs"), roots)).toBeUndefined();
+    expect(choices.suggested(join(dir, "work", "repo", "src"), roots)).toBe(roots[1]);
+    expect(choices.suggested(join(dir, "logs"), roots)).toBe(roots[0]);
+    expect(choices.suggested(join(dir, "work"), roots)).toBe(roots[1]);
   });
 
   test("matches directories and roots through symlinks", () => {

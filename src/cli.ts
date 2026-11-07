@@ -119,7 +119,7 @@ async function viewNotebook(options: Options): Promise<number> {
     return withRenderer((renderer) => view(renderer, notebook, options.follow));
   }
   const title = `Notebook root for ${basename(resolve(start))}`;
-  const preselected = rootChoices.chosen(start, roots) ?? roots[0]!;
+  const preselected = rootChoices.suggested(start, roots) ?? roots[0]!;
   const asked = process.env.KOMUX_SOCKET ? await untilSignal((cancel) => askRootWithKomux(title, roots, preselected, cancel)) : undefined;
   if (asked?.status === "cancelled") return 0;
   return withRenderer(async (renderer) => {

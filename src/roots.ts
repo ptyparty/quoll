@@ -20,6 +20,11 @@ export class RootChoices {
 
   chosen(dir: string, roots: string[]): string | undefined {
     const choices = this.read();
+    return roots.find((root) => notebookPath(root) === choices[notebookPath(dir)]);
+  }
+
+  suggested(dir: string, roots: string[]): string | undefined {
+    const choices = this.read();
     for (let at = notebookPath(dir); ; at = dirname(at)) {
       const chosen = roots.find((root) => notebookPath(root) === choices[at]);
       if (chosen !== undefined || dirname(at) === at) return chosen;
